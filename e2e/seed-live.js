@@ -1,4 +1,4 @@
-// Aegis — seed live activity on StudioNet so the war-room board reads real data.
+// Proofmark — seed live activity on StudioNet so the board reads real data.
 //
 // Registers a fresh agent, funds every tier pool (underwriting), then issues a
 // 1 GEN policy on the agent so the hero shows a locked-exposure sliver + live

@@ -3,6 +3,47 @@
 Running log of investigation, testing, fixes, and deployment. Newest first
 within each section; keep this updated as work happens.
 
+## 🔄 REBRAND IN PROGRESS — Aegis → **Proofmark** (2026-09-06)
+
+The whole product is being rebranded to **Proofmark** per
+`proofmark-rebrand-spec.md` (AEGIS root): contract, frontend, tests, docs, e2e,
+design system, copy. **This file is renamed `PROOFMARK_PROGRESS.md` in Phase 4**;
+historical entries below stay as-is until then. Repo folder is still `aegis-repo`
+(local); **the GitHub repo was renamed to `proofmark` by the user — origin URL is
+NOT to be touched** (GitHub redirects it; pushes still work). Two locked decisions:
+(1) the contract rename → **new deploy artifact** → redeploy StudioNet + Bradbury
+to fresh addresses + re-run the live proof (Phase 6); (2) scope = **everything**
+(in-repo + AEGIS-root deliverables + SECURITY-CHECK review docs).
+
+Phase state (newest first):
+- **Phase 2 — DONE (uncommitted):** e2e harness rebranded — `run.js`/`seed-live.js`/
+  `verify-payments.js` headers + `CONTRACT_PATH`→`proofmark.py`, mirrors →
+  `lib/proofmarkClient.ts` / `test_proofmark.py`, deploy label, `package.json` +
+  `package-lock.json` name → `proofmark-e2e` + description. `node --check` clean on
+  all 4 scripts; no Aegis/war-room tokens left in harness sources. (No ABI/method
+  name change — `run.js` e2e method calls untouched, spec §11.)
+- **Phase 1 — DONE (commit `1133f7b`):** `git mv aegis.py→proofmark.py`,
+  `test_aegis.py→test_proofmark.py`, `test_smoke.py→test_proofmark_smoke.py`;
+  module docstring → Proofmark trust-infrastructure positioning (spec §8),
+  `class Aegis` → `class Proofmark`, all 47 deploy-path + docstring-header refs
+  updated; `intelligent-contracts/README.md` rewritten (deploy table marked
+  *pending Phase 6 redeploy*). **Gates: `genvm-lint` clean (Contract: Proofmark,
+  17 methods); `pytest tests/direct/` 47/47 PASS.**
+- **Phase 0 — DONE (commit `13219c4`):** pre-rebrand Shape B baseline committed
+  (security fixes, 46 tests, harness rewrite, StudioNet e2e **37/37** on
+  `0x589472da571Db60151100b153D65a7170367E17D` — recorded as the *pre-rename
+  validation*).
+
+Next: **Phase 3** frontend rebrand (Geist fonts, globals.css token/stamp/pill
+replacement, `page.tsx` copy/logo/tabs **Verdicts**/status chips, `lib/identity.ts`
+key migration, `aegisClient.ts→proofmarkClient.ts` + `penalty` tier +
+`VERDICT_BOND_ATTO`, `IdentityBadge`, `ProofmarkLogo.tsx`, package →
+`proofmark-frontend`, esbuild TSX gate). Then Phase 4 doc renames to
+`PROOFMARK_*`, Phase 5 AEGIS-root + SECURITY-CHECK sweep, **Phase 6 redeploy +
+re-proof** (fresh StudioNet + Bradbury addresses, e2e + verify-payments + judged
+claim + seed), Phase 7 evidence + Vercel env manual step
+(`NEXT_PUBLIC_PROOFMARK_*`).
+
 ## Status (2026-09-03)
 
 - **Done (Shape A gaming hardening shipped — patch + full redeploy + re-seed):**

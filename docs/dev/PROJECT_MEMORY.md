@@ -4,6 +4,21 @@ Local working notes. This file holds facts that are easy to lose between
 sessions: deployed addresses, network quirks, tooling gotchas, and the
 reasoning behind decisions. Update it whenever something notable changes.
 
+## 🔄 REBRAND IN PROGRESS — Aegis → Proofmark (2026-09-06)
+
+Product is being renamed **Aegis → Proofmark** across everything
+(`proofmark-rebrand-spec.md`, AEGIS root). Contract now lives at
+`intelligent-contracts/proofmark.py` (`class Proofmark`); tests renamed
+`tests/direct/test_proofmark*.py`; e2e package → `proofmark-e2e` (Phase 1–2 done,
+commit `1133f7b`). Frontend (Phase 3) + doc renames to `PROOFMARK_*` (Phase 4) +
+AEGIS-root/review-doc sweep (Phase 5) pending. **No ABI change** — the rename
+makes a new deploy artifact, so **Phase 6 redeploys StudioNet + Bradbury to fresh
+addresses** and re-runs the live proof on the Proofmark contract. The StudioNet
+e2e **37/37** run on `0x589472da571Db60151100b153D65a7170367E17D` (2026-09-06) is
+the **historical pre-rename validation**. GitHub repo was renamed to `proofmark`
+by the user (origin URL untouched; GitHub redirects). All old addresses below
+(`0x605e…`, `0x79C1…`) are pre-rebrand Shape A — superseded after Phase 6.
+
 ## What the project is
 
 Aegis = non-performance insurance for the AI-agent marketplace, on GenLayer.

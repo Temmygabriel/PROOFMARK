@@ -1,9 +1,9 @@
 {
-  "name": "aegis-e2e",
+  "name": "proofmark-e2e",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Real-network end-to-end harness for the Aegis contract (StudioNet + Bradbury). Signs locally with genlayer-js, mirrors frontend/lib/aegisClient.ts.",
+  "description": "Real-network end-to-end harness for the Proofmark contract (StudioNet + Bradbury). Signs locally with genlayer-js, mirrors frontend/lib/proofmarkClient.ts.",
   "dependencies": {
     "genlayer-js": "^1.2.0"
   },

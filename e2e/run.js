@@ -1,11 +1,11 @@
-// Aegis real-network end-to-end harness (StudioNet + Bradbury).
-// Mirrors frontend/lib/aegisClient.ts + identity.ts: signs locally with
+// Proofmark real-network end-to-end harness (StudioNet + Bradbury).
+// Mirrors frontend/lib/proofmarkClient.ts + identity.ts: signs locally with
 // genlayer-js accounts created from private keys WE hold (the viem
 // private-key trap: persist our own copy, rebuild via createAccount(key)).
 //
 // Usage:
 //   node run.js keys [--force]          create/refresh e2e/keys.json + print addresses
-//   node run.js deploy --network <n>    deploy intelligent-contracts/aegis.py via the CLI,
+//   node run.js deploy --network <n>    deploy intelligent-contracts/proofmark.py via the CLI,
 //                                       record the address in results/<n>.address
 //   node run.js probe --network <n> [--address <hex>]   minimal register + raw shape
 //   node run.js e2e   --network <n> [--address <hex>]   full deterministic scenario
@@ -24,7 +24,7 @@ import { studionet, testnetBradbury } from "genlayer-js/chains";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const KEYS_FILE = path.join(__dirname, "keys.json");
 const RESULTS_DIR = path.join(__dirname, "results");
-const CONTRACT_PATH = path.join(__dirname, "..", "intelligent-contracts", "aegis.py");
+const CONTRACT_PATH = path.join(__dirname, "..", "intelligent-contracts", "proofmark.py");
 
 // ---------------------------------------------------------------------------
 // Networks (default canonical addresses come from docs/DEPLOYMENT.md)
@@ -44,7 +44,7 @@ const NETS = {
   },
 };
 
-// Fixed amounts (atto GEN) -- mirrors tests/direct/test_aegis.py.
+// Fixed amounts (atto GEN) -- mirrors tests/direct/test_proofmark.py.
 const GEN = 10n ** 18n;
 const CLAIM_BOND = 2n * GEN;
 const MIN_COVERAGE = 10n ** 16n;
@@ -559,7 +559,7 @@ async function deployTo(netName) {
   const addr = m[1];
   fs.mkdirSync(RESULTS_DIR, { recursive: true });
   fs.writeFileSync(path.join(RESULTS_DIR, `${netName}.address`), addr);
-  console.log(`Deployed ${net.label} aegis.py -> ${addr}`);
+  console.log(`Deployed ${net.label} proofmark.py -> ${addr}`);
   return addr;
 }
 
