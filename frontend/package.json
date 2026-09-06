@@ -1,7 +1,8 @@
 {
-  "name": "aegis-frontend",
+  "name": "proofmark-frontend",
   "version": "0.1.0",
   "private": true,
+  "description": "Proofmark — Trust infrastructure for AI agent transactions",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

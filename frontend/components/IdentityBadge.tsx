@@ -180,9 +180,9 @@ export function IdentityBadge() {
 
           {/* 2 — honesty notice */}
           <div className="idnote">
-            Every transaction is signed by your browser-stored identity, not
-            MetaMask. MetaMask can&apos;t sign for this chain — if you connect it
-            below it&apos;s shown for reference only.
+            Transactions are signed by your browser identity — a key stored
+            locally in this browser. MetaMask cannot sign for GenLayer.
+            Connecting it here shows your address for reference only.
           </div>
 
           <hr className="idsep" />

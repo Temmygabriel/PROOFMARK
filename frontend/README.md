@@ -1,11 +1,18 @@
-# Aegis Frontend
+# Proofmark Frontend
 
-Next.js dashboard for the single-file `aegis.py` intelligent contract:
-register agents, quote and issue policies, underwrite pools as an LP, file
-claims, and watch consensus verdicts resolve — all read/write calls go
-straight from the browser to the configured GenLayer network via
-`genlayer-js` (StudioNet by default, Testnet Bradbury with
-`NEXT_PUBLIC_AEGIS_NETWORK=testnet-bradbury`).
+Next.js dashboard for the single-file `intelligent-contracts/proofmark.py`
+intelligent contract: register agents, back jobs with coverage, underwrite
+tier pools as an LP, submit deliverables, request verdicts, and watch
+conformance verdicts resolve as ink stamps — all read/write calls go straight
+from the browser to the configured GenLayer network via `genlayer-js`
+(StudioNet by default, Testnet Bradbury with
+`NEXT_PUBLIC_PROOFMARK_NETWORK=testnet-bradbury`).
+
+Transactions are signed by a **browser identity** — a genlayer-js keypair
+stored in this browser's localStorage (key `proofmark.identity.pk.v1`), not by
+MetaMask (which cannot sign GenLayer transactions). The identity menu
+(`IdentityBadge`) shows/copies the private key, recovers a wallet from a key,
+and can generate a fresh identity.
 
 ## Local development
 
@@ -16,37 +23,30 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. You'll need MetaMask installed — the app adds
-Studio as a network on first connect if it isn't already there.
+Open `http://localhost:3000`. There's no local `next build`/`tsc` on this
+machine (8 GB RAM, no node_modules) — the parse gate is `esbuild` over the
+`app/` + `components/` + `lib/` sources into the gitignored `.esbuild-check/`
+directory before pushes.
 
-## Your workflow: GitHub → Vercel
+## Deploying: GitHub → Vercel
 
-1. **Push this folder to a new GitHub repo:**
-
-   ```bash
-   git init
-   git add .
-   git commit -m "Aegis frontend"
-   git branch -M main
-   git remote add origin https://github.com/<you>/<repo>.git
-   git push -u origin main
-   ```
+1. **Push this repo** (the whole `aegis-repo`, not just this folder) to GitHub.
 
 2. **Import it in Vercel:**
    - vercel.com → *Add New* → *Project* → import the GitHub repo.
    - Framework preset: Vercel auto-detects Next.js, no changes needed.
 
 3. **Add the contract address + network as environment variables:**
-   - In the Vercel project → *Settings* → *Environment Variables*.
-   - `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS` — the address from
-     `genlayer deploy --contract intelligent-contracts/aegis.py`.
-   - `NEXT_PUBLIC_AEGIS_NETWORK` — `studionet` or `testnet-bradbury`
-     (see the live addresses in `docs/DEPLOYMENT.md`).
-   - Apply to Production (and Preview if you want preview deploys to work
-     against the same contract).
+   - Vercel project → *Settings* → *Environment Variables*:
+     - `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS` — the address from
+       `genlayer deploy --contract intelligent-contracts/proofmark.py`.
+     - `NEXT_PUBLIC_PROOFMARK_NETWORK` — `studionet` or `testnet-bradbury`
+       (live addresses are recorded in `docs/PROOFMARK_DEPLOYMENT.md`).
+   - Apply to Production (and Preview if you want preview deploys against the
+     same contract).
    - **Redeploy** after adding them — Next.js inlines `NEXT_PUBLIC_*` vars at
-     build time, so a running deployment won't pick up a newly-added one
-     until it rebuilds.
+     build time, so a running deployment won't pick up a newly-added one until
+     it rebuilds.
 
 4. Every subsequent `git push` to `main` triggers a new Vercel deployment
    automatically.
@@ -54,20 +54,22 @@ Studio as a network on first connect if it isn't already there.
 ## If you redeploy the contract later
 
 Contract addresses are per-deployment and per-network. If you redeploy
-`aegis.py` (fresh state, new address), update the Vercel env vars and redeploy
-the frontend — nothing else in this app needs to change, since the address and
-network are the only things that are environment-specific.
+`proofmark.py` (fresh state, new address), update the Vercel env vars and
+redeploy the frontend — nothing else in this app needs to change, since the
+address and network are the only environment-specific things.
 
-## Notes on what's deliberately not built yet
+## Honesty notes in the UI
 
-- **Withdraw as an LP** is wired in `lib/aegisClient.ts` (`withdraw(account,
-  tier, shares)`) but has no dedicated UI panel in this first pass — the
-  deposit/pool-status panels were the priority to get you testing end to
-  end. Adding a withdraw form is a small addition to `app/page.tsx` whenever
-  you want it.
-- **Evidence hashes** (`spec_hash` / `deliverable_hash`) are passed through
-  as plain strings to the contract, which appends them to a fixed IPFS
-  gateway. If you're testing with plain HTTPS URLs instead (see
-  `STUDIO_TESTING.md` from the contract package), that's fine — the
-  frontend doesn't validate the format, it just passes through whatever the
-  contract expects.
+- **Conformance is not fabricated.** The contract stores no 0–100 score, so the
+  job-record card shows an honest breach/conforming track (40-threshold tick,
+  no fill) and explains the scoring rule in words. The verdict stamp only
+  renders for a **real resolved** claim read from `get_claim_status`.
+- **"X GEN backing active jobs"** is the contract's locked-exposure figure —
+  the contract exposes no live policy count, so the hero states what the chain
+  can actually prove.
+- **Recent activity** is a local log of this browser's confirmed writes (plus a
+  one-time replay of the genuine seed transactions on the canonical StudioNet
+  deploy, so a first-time reviewer sees a funded board). It is not a chain-wide
+  event feed.
+- Empty-pool quoting surfaces the "fund the pool" gate; a live quote re-quotes
+  at payment time so a stale tier rate can never fire a wrong-amount revert.

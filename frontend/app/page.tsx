@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import {
-  AEGIS_ADDRESS,
+  PROOFMARK_ADDRESS,
   NETWORK_NAME,
-  CLAIM_BOND_ATTO,
+  VERDICT_BOND_ATTO,
   VALID_TIERS,
   Tier,
   register,
@@ -23,14 +23,16 @@ import {
   formatAttoToGen,
   cleanContractError,
   toBig,
-} from "@/lib/aegisClient";
+} from "@/lib/proofmarkClient";
 import { useIdentity } from "@/app/providers";
 import { IdentityBadge } from "@/components/IdentityBadge";
+import { ProofmarkLogo } from "@/components/ProofmarkLogo";
 import type { GenAccount } from "@/lib/identity";
 
 /* ------------------------------------------------------------------ utils */
 
-const NET_LABEL = NETWORK_NAME === "testnetBradbury" ? "Testnet Bradbury" : "StudioNet";
+const NET_LABEL =
+  NETWORK_NAME === "testnetBradbury" ? "Bradbury Testnet" : "StudioNet";
 
 const TIERS: Tier[] = [...VALID_TIERS];
 
@@ -39,6 +41,7 @@ const TIER_NAMES: Record<Tier, string> = {
   bronze: "Bronze",
   silver: "Silver",
   gold: "Gold",
+  penalty: "Penalty",
 };
 
 /** Format atto-GEN to a tidy GEN string with trailing zeros trimmed. */
@@ -54,7 +57,7 @@ function errText(e: any): string {
 
 /* ------------------------------------------------------ live activity feed */
 
-const FEED_KEY = "aegis.activity.v1";
+const FEED_KEY = "proofmark.activity.v1";
 
 type FeedEntry = {
   action: "register" | "deposit" | "issue" | "deliverable" | "claim" | "verdict";
@@ -102,7 +105,7 @@ function pushFeed(entry: Omit<FeedEntry, "ts">) {
     seedFeedOnce(); // a first write on a fresh browser stacks above the seeded history
     const next = [{ ...entry, ts: Date.now() }, ...readFeed()].slice(0, 20);
     localStorage.setItem(FEED_KEY, JSON.stringify(next));
-    window.dispatchEvent(new Event("aegis:feed"));
+    window.dispatchEvent(new Event("proofmark:feed"));
   } catch {
     /* storage can be blocked (private windows) -- the app keeps working */
   }
@@ -115,7 +118,7 @@ function pushFeed(entry: Omit<FeedEntry, "ts">) {
 function seedFeedOnce() {
   try {
     if (localStorage.getItem(FEED_KEY) !== null) return; // not a brand-new browser
-    if (AEGIS_ADDRESS?.toLowerCase() !== SEEDED_CONTRACT) return; // not the seeded deploy
+    if (PROOFMARK_ADDRESS?.toLowerCase() !== SEEDED_CONTRACT) return; // not the seeded deploy
     localStorage.setItem(FEED_KEY, JSON.stringify(SEED_ACTIVITY));
   } catch {
     /* storage can be blocked (private windows) -- the app keeps working */
@@ -158,15 +161,15 @@ function Feed() {
     seedFeedOnce(); // a fresh browser on the seeded deploy sees its real history
     const load = () => setEntries(readFeed());
     load();
-    window.addEventListener("aegis:feed", load);
-    return () => window.removeEventListener("aegis:feed", load);
+    window.addEventListener("proofmark:feed", load);
+    return () => window.removeEventListener("proofmark:feed", load);
   }, []);
 
   if (entries.length === 0) {
     return (
       <p className="feed-empty">
         Nothing yet. Every confirmed write lands here — register an agent, fund a
-        pool, insure a job, file a claim.
+        pool, back a job, request a verdict.
       </p>
     );
   }
@@ -199,10 +202,12 @@ function timeAgo(ts: number): string {
 
 function feedDotColor(e: FeedEntry): string {
   if (e.action === "verdict") {
+    // A verdict marks the delivery OUTCOME: upheld claim = not delivered =
+    // breach amber; rejected claim = delivered = settled green.
     return e.verdict === "upheld"
-      ? "var(--ok)"
+      ? "var(--breach)"
       : e.verdict === "rejected"
-        ? "var(--err)"
+        ? "var(--ok)"
         : "var(--text-faint)";
   }
   switch (e.action) {
@@ -211,9 +216,9 @@ function feedDotColor(e: FeedEntry): string {
     case "deposit":
       return "var(--ok)";
     case "issue":
-      return "var(--copper)";
+      return "var(--proof)";
     case "deliverable":
-      return "var(--copper-bright)";
+      return "var(--proof-bright)";
     case "claim":
     default:
       return "var(--text-faint)";
@@ -237,7 +242,7 @@ function FeedBody({ e }: { e: FeedEntry }) {
     case "issue":
       return (
         <span>
-          Insured <b>{e.agentId}</b>&apos;s job <b>{e.jobId}</b>
+          Backed <b>{e.agentId}</b>&apos;s job <b>{e.jobId}</b>
         </span>
       );
     case "deliverable":
@@ -249,28 +254,31 @@ function FeedBody({ e }: { e: FeedEntry }) {
     case "claim":
       return (
         <span>
-          Claim filed on job <b>{e.jobId}</b>
+          Verdict requested on job <b>{e.jobId}</b>
         </span>
       );
     case "verdict":
       return e.verdict === "upheld" ? (
         <span>
-          Claim on <b>{e.jobId}</b> resolved <b>UPHELD</b> — buyer paid
+          Job <b>{e.jobId}</b> <b>NOT DELIVERED</b> — coverage paid to buyer
         </span>
       ) : e.verdict === "rejected" ? (
         <span>
-          Claim on <b>{e.jobId}</b> resolved <b>REJECTED</b> — bond forfeited
+          Job <b>{e.jobId}</b> <b>DELIVERED</b> — claim bond returned
         </span>
       ) : (
         <span>
-          Claim on <b>{e.jobId}</b> still open
+          Verdict pending for job <b>{e.jobId}</b>
         </span>
       );
   }
 }
 
-/** A physical ink stamp for a resolved claim — the one unmistakable element. */
-function VerdictStamp({
+/** A physical ink stamp for a resolved claim — the one unmistakable element.
+ * The stamp names the DELIVERY OUTCOME, not the legal status of the claim:
+ * an upheld claim means the job was NOT DELIVERED (amber); a rejected claim
+ * means it WAS delivered (settled green). */
+function ConformanceStamp({
   v,
   jobId,
   detail,
@@ -283,51 +291,61 @@ function VerdictStamp({
   amount?: string;
   note?: string;
 }) {
-  const cls = v === "upheld" ? "upheld" : v === "rejected" ? "rejected" : "";
-  return (
-    <div className={`verdict-card ${cls}`}>
-      <div className={`stamp ${cls}`}>
-        <div className="stamp-text">
-          {v === "upheld" ? (
-            <>
-              UPHELD
-              <br />✓
-            </>
-          ) : v === "rejected" ? (
-            <>
-              REJECTED
-              <br />✕
-            </>
-          ) : (
-            "OPEN"
-          )}
+  if (v === "unresolved") {
+    return (
+      <div className="verdict-card pending">
+        <div className="stamp pending">
+          <div className="stamp-text">Pending</div>
         </div>
+        <div className="verdict-info">
+          <div className="verdict-job mono">{jobId}</div>
+          <div className="verdict-headline">{detail}</div>
+          {note && <div className="verdict-detail">{note}</div>}
+        </div>
+      </div>
+    );
+  }
+  const notDelivered = v === "upheld";
+  const state = notDelivered ? "not-delivered" : "delivered";
+  return (
+    <div className={`verdict-card ${state}`}>
+      <div className={`stamp ${state}`}>
+        <span className="stamp-icon">{notDelivered ? "✗" : "✓"}</span>
+        <span className="stamp-text">
+          {notDelivered ? "Not\nDelivered" : "Delivered"}
+        </span>
       </div>
       <div className="verdict-info">
         <div className="verdict-job mono">{jobId}</div>
-        <div className="verdict-headline">{detail}</div>
-        {note && <div className="verdict-detail">{note}</div>}
+        <div className="verdict-headline">
+          {notDelivered
+            ? "Delivery failed conformance — coverage paid to buyer"
+            : "Delivery confirmed — claim bond returned to claimant"}
+        </div>
+        {detail && <div className="verdict-detail">{detail}</div>}
       </div>
       {amount && (
         <div className="verdict-amount-col">
-          <div className={`verdict-amount ${cls}`}>{amount}</div>
+          <div className={`verdict-amount ${state}`}>{amount}</div>
           <div className="verdict-amount-label">
-            {v === "upheld" ? "paid to buyer" : "bond forfeited"}
+            {notDelivered ? "covered" : "bond returned"}
           </div>
         </div>
       )}
+      {note && <div className="verdict-note">{note}</div>}
     </div>
   );
 }
 
-/** Hero-left risk bars: each tier's pool balance as a share of TVL, with the
+/** Hero-left pool bars: each tier's pool balance as a share of TVL, with the
  * locked-exposure region drawn dark inside the fill. */
-function TierBars({ pools, tvl }: { pools: Record<Tier, PoolSnap>; tvl: bigint }) {
+function PoolBars({ pools, tvl }: { pools: Record<Tier, PoolSnap>; tvl: bigint }) {
   const configs: { tier: Tier; color: string; rate: string }[] = [
     { tier: "unrated", color: "var(--unrated)", rate: "6%" },
     { tier: "bronze", color: "var(--bronze)", rate: "4%" },
     { tier: "silver", color: "var(--silver)", rate: "2.5%" },
     { tier: "gold", color: "var(--gold)", rate: "1.5%" },
+    { tier: "penalty", color: "var(--penalty)", rate: "12%" },
   ];
 
   return (
@@ -427,31 +445,31 @@ function derivePolicyState(p: PolicyInfo): PolicyDisplayState {
   const pastDeadline = Number.isNaN(dl) ? false : dl <= Date.now();
   if (p.status === "claimed")
     return {
-      label: "Paid out",
-      cls: "claimed",
-      action: "Verdict is final — the payout already left the pool.",
+      label: "Coverage paid",
+      cls: "closed",
+      action: "Verdict is final — the coverage already left the pool.",
     };
   if (p.status === "expired")
-    return { label: "Expired", cls: "expired", action: null };
+    return { label: "Closed", cls: "closed", action: null };
   // status === "active":
   if (!hasDeliv && !pastDeadline)
-    return { label: "Awaiting delivery", cls: "awaiting", action: null };
+    return { label: "Waiting for delivery", cls: "awaiting", action: null };
   if (!hasDeliv && pastDeadline)
     return {
-      label: "Auto-breach available",
+      label: "Claimable — no delivery",
       cls: "breach",
       action:
         "No deliverable was submitted before the deadline — the clock has already decided. File a claim to collect; there is no bond risk.",
     };
   if (hasDeliv && !pastDeadline)
     return {
-      label: "Deliverable submitted",
+      label: "Evidence submitted",
       cls: "submitted",
       action:
         "Only file a claim if the deliverable does not conform to the spec — a wrong claim is rejected and the bond is forfeited.",
     };
   return {
-    label: "Ready to claim",
+    label: "Ready for verdict",
     cls: "ready",
     action: "Deadline passed with a deliverable on file. File a claim if it did not meet the spec.",
   };
@@ -505,11 +523,10 @@ function AgentsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h3 className="panel-title">Register an agent</h3>
+            <h3 className="panel-title">Register your agent</h3>
             <p className="panel-desc">
-              Binds your connected wallet to one <code>agent_id</code>, permanently.
-              One address, one identity — a track record you can't start over to dodge
-              bad claims.
+              Your on-chain track record starts here. Every job you deliver builds
+              your reputation. Better track records mean lower rates for your buyers.
             </p>
           </div>
         </div>
@@ -525,14 +542,12 @@ function AgentsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
         <Notice n={regN} />
         {regN.status === "ok" && (
           <p className="hint" style={{ marginTop: -6 }}>
-            Agent <b>{agentId}</b> is live, starting at tier <b>Unrated</b>. Share
-            this agent ID with buyers so they can insure jobs against you. Your tier
-            improves automatically as insured jobs and a clean claim history
-            accumulate — no action required. Your profile is shown below.
+            Your agent is registered. Coverage for your jobs is now available.
+            Your rate improves automatically as you build a delivery record.
           </p>
         )}
         <p className="hint">
-          Buying cover for an unregistered agent won't work — a policy always points
+          Backing a job for an unregistered agent won't work — every job record points
           back at a real registered identity.
         </p>
       </div>
@@ -542,7 +557,7 @@ function AgentsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
           <div>
             <h3 className="panel-title">Agent reputation</h3>
             <p className="panel-desc">
-              Tier, jobs insured, and claim history. This is exactly what the premium
+              Tier, jobs covered, and claim history. This is exactly what the premium
               engine prices off.
             </p>
           </div>
@@ -571,7 +586,7 @@ function AgentsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
               </span>
             </div>
             <div>
-              <span className="kv-label">Jobs insured</span>
+              <span className="kv-label">Jobs covered</span>
               <span className="kv-value">{toBig(prof.jobs_insured).toString()}</span>
             </div>
             <div>
@@ -674,10 +689,11 @@ function PoolsPanel({
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h3 className="panel-title">Add liquidity</h3>
+            <h3 className="panel-title">Underwrite</h3>
             <p className="panel-desc">
-              Deposit GEN into a tier&apos;s pool. Your shares back active coverage and
-              earn that tier&apos;s premiums — but they absorb its claims too.
+              Earn premiums by underwriting AI agent delivery risk. Capital is pooled
+              by agent tier. Payouts are capped per claim. Verdicts are reached by
+              GenLayer consensus — not a single judge.
             </p>
           </div>
         </div>
@@ -699,7 +715,7 @@ function PoolsPanel({
         </div>
         <div className="btn-row">
           <button className="btn btn-primary" disabled={depN.status === "pending"} onClick={doDeposit}>
-            {depN.status === "pending" ? "Depositing…" : "Deposit"}
+            {depN.status === "pending" ? "Depositing…" : "Add capital"}
           </button>
         </div>
         <Notice n={depN} />
@@ -756,7 +772,7 @@ function PoolsPanel({
           </button>
           {position !== null && position > 0n && (
             <button className="btn btn-primary" disabled={withdrawN.status === "pending"} onClick={doWithdraw}>
-              {withdrawN.status === "pending" ? "Withdrawing…" : "Withdraw all"}
+              {withdrawN.status === "pending" ? "Withdrawing…" : "Withdraw capital"}
             </button>
           )}
         </div>
@@ -820,8 +836,8 @@ function CoveragePanel({
         setNeedPool(q.tier);
         setQuoteN({
           status: "error",
-          title: `No underwriting capital in the ${TIER_NAMES[q.tier]} pool yet`,
-          detail: `This policy can't be issued until an LP deposits into the ${TIER_NAMES[q.tier].toLowerCase()} pool.`,
+          title: `No capital in the ${TIER_NAMES[q.tier]} pool yet`,
+          detail: `Add capital in the Underwrite tab to enable coverage for this agent tier.`,
         });
         return;
       }
@@ -849,8 +865,8 @@ function CoveragePanel({
         setNeedPool(q.tier);
         setIssueN({
           status: "error",
-          title: `No underwriting capital in the ${TIER_NAMES[q.tier]} pool yet`,
-          detail: `Fund the ${TIER_NAMES[q.tier].toLowerCase()} pool first (Pools tab), then issue again.`,
+          title: `No capital in the ${TIER_NAMES[q.tier]} pool yet`,
+          detail: `Add capital in the Underwrite tab to enable coverage for this agent tier.`,
         });
         return;
       }
@@ -861,11 +877,11 @@ function CoveragePanel({
         setIssueN({
           status: "ok",
           title: "Premium updated",
-          detail: `The tier rate moved — the box now shows the current ${gen(freshPremium)} GEN. Press "Issue policy" again to pay exactly that.`,
+          detail: `The tier rate moved — the box now shows the current ${gen(freshPremium)} GEN. Press "Back this job" again to pay exactly that.`,
         });
         return;
       }
-      setIssueN({ status: "pending", title: "Issuing policy on-chain…" });
+      setIssueN({ status: "pending", title: "Backing job on-chain…" });
       const addr = await ensureWallet();
       const job = jobId.trim();
       const agent = covAgentId.trim();
@@ -880,7 +896,7 @@ function CoveragePanel({
       );
       setQuote(null);
       setQuoteN(idleNotice);
-      setIssueN({ status: "ok", title: "Policy is live", detail: `tx ${hash}` });
+      setIssueN({ status: "ok", title: "Job is backed", detail: `tx ${hash}` });
       pushFeed({
         action: "issue",
         jobId: job,
@@ -890,7 +906,7 @@ function CoveragePanel({
       });
       // Surface the new policy in the status panel immediately.
       setPolJob(job);
-      setPolN({ status: "pending", title: "Reading your new policy…" });
+      setPolN({ status: "pending", title: "Reading your new job record…" });
       try {
         const p = await getPolicy(job);
         setPol(p);
@@ -900,7 +916,7 @@ function CoveragePanel({
         setPolN(idleNotice);
       }
     } catch (e: any) {
-      setIssueN({ status: "error", title: "Issue failed", detail: errText(e) });
+      setIssueN({ status: "error", title: "Back failed", detail: errText(e) });
     }
   }
 
@@ -914,7 +930,7 @@ function CoveragePanel({
   }
 
   async function doPolicyLookup() {
-    setPolN({ status: "pending", title: "Reading policy…" });
+    setPolN({ status: "pending", title: "Reading job record…" });
     try {
       const p = await getPolicy(polJob);
       setPol(p);
@@ -936,26 +952,26 @@ function CoveragePanel({
   const chipLabel =
     pol?.status === "claimed"
       ? polClaim === "upheld"
-        ? "Claimed · paid out"
+        ? "Coverage paid"
         : polClaim === "rejected"
-          ? "Claim rejected"
-          : "Claim in review"
+          ? "Delivery confirmed"
+          : "Pending"
       : st?.label;
   const chipCls =
     pol?.status === "claimed"
       ? polClaim === "upheld"
-        ? "claimed"
+        ? "closed"
         : polClaim === "rejected"
-          ? "rejected"
-          : "breach"
+          ? "delivered"
+          : "awaiting"
       : st?.cls ?? "";
   const noDeliverable = !pol || !(pol.deliverable_hash ?? "").trim();
   const scoreNote = resolved
     ? resolved === "upheld"
       ? noDeliverable
         ? "Deterministic breach: no deliverable was on file by the deadline, so validators committed it — no conformance score."
-        : "Validators independently re-fetched the spec and the deliverable and judged conformance. UPHELD — the payout left the pool."
-      : "Validators independently re-fetched the spec and the deliverable and judged it conforming. REJECTED — the claim bond was forfeited."
+        : "Validators independently re-fetched the spec and the deliverable and scored conformance below 40. NOT DELIVERED — the pool paid the buyer the coverage."
+      : "Validators independently re-fetched the spec and the deliverable and scored conformance at 40 or above. DELIVERED — the claim was rejected and the bond forfeited to the pool."
     : pol?.status === "claimed"
       ? "This claim is being resolved — validators are independently re-fetching the evidence."
       : pol
@@ -968,9 +984,9 @@ function CoveragePanel({
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h3 className="panel-title">Quote &amp; issue cover</h3>
+            <h3 className="panel-title">Back a job</h3>
             <p className="panel-desc">
-              Premiums are exact and deterministic — quote first, then pay.
+              Premiums are exact and deterministic — quote first, then back.
             </p>
           </div>
         </div>
@@ -1031,7 +1047,7 @@ function CoveragePanel({
                 disabled={issueN.status === "pending"}
                 onClick={doIssue}
               >
-                {issueN.status === "pending" ? "Issuing…" : "Issue policy →"}
+                {issueN.status === "pending" ? "Backing…" : "Back this job →"}
               </button>
             ) : (
               <button className="btn btn-ghost btn-sm issue-cta" onClick={onGoPools}>
@@ -1047,8 +1063,8 @@ function CoveragePanel({
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h3 className="panel-title">Policy status</h3>
-            <p className="panel-desc">Live state of any insured job.</p>
+            <h3 className="panel-title">Job record</h3>
+            <p className="panel-desc">Live state of any job on the rail.</p>
           </div>
         </div>
         <div className="field">
@@ -1092,7 +1108,7 @@ function CoveragePanel({
                 <span className="pol-k">
                   {resolved
                     ? resolved === "upheld"
-                      ? "Payout sent"
+                      ? "Coverage paid"
                       : "Bond forfeited"
                     : "Payout"}
                 </span>
@@ -1102,7 +1118,7 @@ function CoveragePanel({
                   {resolved === "upheld"
                     ? `${gen(pol.coverage_atto)} GEN`
                     : resolved === "rejected"
-                      ? `${gen(CLAIM_BOND_ATTO)} GEN`
+                      ? `${gen(VERDICT_BOND_ATTO)} GEN`
                       : "—"}
                 </span>
               </div>
@@ -1123,7 +1139,7 @@ function CoveragePanel({
         {!pol && polN.status !== "error" && (
           <p className="hint">
             Look up a job id to see its status, coverage, pool tier — and, once a
-            claim resolves, the payout below.
+            claim resolves, the verdict stamp lands below.
           </p>
         )}
       </div>
@@ -1131,22 +1147,22 @@ function CoveragePanel({
       {/* full-width verdict strip: only for a real, resolved inspection */}
       {resolved && pol && (
         <div className="verdict-panel">
-          <VerdictStamp
+          <ConformanceStamp
             v={resolved}
             jobId={`${polJob.trim()} · ${pol.agent_id} · ${TIER_NAMES[pol.pool_tier]} tier`}
             detail={
               resolved === "upheld"
-                ? "Claim upheld — breach confirmed"
-                : "Claim rejected — deliverable met the spec"
+                ? "Conformance scored below 40 — the deliverable failed the spec, so the pool paid the buyer the full coverage."
+                : "Conformance scored at or above 40 — the deliverable met the spec, so the claim was dismissed and the bond forfeited to the pool."
             }
             amount={
               resolved === "upheld"
                 ? `${gen(pol.coverage_atto)} GEN`
-                : `${gen(CLAIM_BOND_ATTO)} GEN`
+                : `${gen(VERDICT_BOND_ATTO)} GEN`
             }
             note={
               resolved === "upheld"
-                ? "The verdict is final on-chain — the payout moved from the pool and the claim bond was refunded. No one clicked pay."
+                ? "The verdict is final on-chain — the coverage moved from the pool and the claim bond was returned. No one clicked pay."
                 : "The verdict is final on-chain — the claim bond was forfeited into the pool."
             }
           />
@@ -1164,7 +1180,7 @@ function CoveragePanel({
   );
 }
 
-/* ============================================================= CLAIMS TAB */
+/* ============================================================ VERDICTS TAB */
 
 function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
   // -- deliverable (agent side)
@@ -1199,13 +1215,13 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
 
   async function doFileClaim() {
     setVerdict(null);
-    setCN({ status: "pending", title: "Filing claim — waiting on validator consensus…" });
+    setCN({ status: "pending", title: "Requesting verdict — waiting on validator consensus…" });
     setCSince(Date.now());
     try {
       const addr = await ensureWallet();
       const { hash } = await fileClaim(addr, cJobId);
       setCSince(null);
-      setCN({ status: "ok", title: "Claim finalized", detail: `tx ${hash}` });
+      setCN({ status: "ok", title: "Verdict requested", detail: `tx ${hash}` });
       pushFeed({ action: "claim", jobId: cJobId.trim() });
       try {
         const v = (await getClaimStatus(cJobId)) as Verdict;
@@ -1218,7 +1234,7 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
       }
     } catch (e: any) {
       setCSince(null);
-      setCN({ status: "error", title: "Claim failed", detail: errText(e) });
+      setCN({ status: "error", title: "Request failed", detail: errText(e) });
     }
   }
 
@@ -1235,9 +1251,9 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
   }
 
   const verdictText: Record<Verdict, string> = {
-    upheld: "Claim upheld — buyer gets paid from the pool",
-    rejected: "Claim rejected — bond forfeited to the pool",
-    unresolved: "No verdict yet — still open for review",
+    upheld: "Coverage paid out — the deliverable failed conformance.",
+    rejected: "Delivery conformed — the claim was dismissed, bond forfeited.",
+    unresolved: "No verdict yet — validators are still scoring the delivery.",
   };
 
   return (
@@ -1250,7 +1266,7 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
           <div>
             <h3 className="panel-title">Submit a deliverable</h3>
             <p className="panel-desc">
-              <em>Agent only.</em> Only the wallet registered as the insured agent can do
+              <em>Agent only.</em> Only the wallet registered as the covered agent can do
               this. It&apos;s the one thing a claim is judged against — a buyer can never
               write their own &quot;proof&quot; of non-performance.
             </p>
@@ -1290,9 +1306,9 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h3 className="panel-title">File a claim</h3>
+            <h3 className="panel-title">Request a verdict</h3>
             <p className="panel-desc">
-              Needs a fixed {gen(CLAIM_BOND_ATTO)} GEN bond — refunded if you&apos;re right,
+              Needs a fixed {gen(VERDICT_BOND_ATTO)} GEN bond — refunded if you&apos;re right,
               forfeited to the pool if you&apos;re wrong. Validators judge it against the
               submitted deliverable.
             </p>
@@ -1304,13 +1320,13 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
         </div>
         <div className="btn-row">
           <button className="btn btn-primary" disabled={cN.status === "pending"} onClick={doFileClaim}>
-            {cN.status === "pending" ? "Waiting on consensus…" : `File claim (bond ${gen(CLAIM_BOND_ATTO)} GEN)`}
+            {cN.status === "pending" ? "Waiting on consensus…" : `Request verdict (bond ${gen(VERDICT_BOND_ATTO)} GEN)`}
           </button>
         </div>
         <Notice n={cN} />
         {cN.status === "pending" && cSince && <ConsensusPending since={cSince} />}
         {verdict && (
-          <VerdictStamp v={verdict} jobId={cJobId.trim()} detail={verdictText[verdict]} />
+          <ConformanceStamp v={verdict} jobId={cJobId.trim()} detail={verdictText[verdict]} />
         )}
       </div>
 
@@ -1332,7 +1348,7 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
         </div>
         <Notice n={vN} />
         {vResult && (
-          <VerdictStamp v={vResult} jobId={vJobId.trim()} detail={verdictText[vResult]} />
+          <ConformanceStamp v={vResult} jobId={vJobId.trim()} detail={verdictText[vResult]} />
         )}
       </div>
     </div>
@@ -1348,7 +1364,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "agents", label: "Agents" },
   { key: "coverage", label: "Coverage" },
   { key: "pools", label: "Pools" },
-  { key: "claims", label: "Claims" },
+  { key: "claims", label: "Verdicts" },
 ];
 
 export default function Home() {
@@ -1426,44 +1442,18 @@ export default function Home() {
   // Capital utilisation = GEN locked backing live cover / total pooled. This
   // is the honest live stand-in for the mock's "45% · 12 live policies" —
   // the contract exposes no policy count, but it does expose locked exposure.
-  const utilPct = tvl > 0n ? Math.min(100, Math.round((Number(locked) / Number(tvl)) * 100)) : 0;
   const ringArc = tvl > 0n ? Math.min(360, (Number(locked) / Number(tvl)) * 360) : 0;
-  const ringBg = `conic-gradient(var(--copper) 0deg ${ringArc}deg, var(--line-strong) ${ringArc}deg 360deg)`;
+  const ringBg = `conic-gradient(var(--proof) 0deg ${ringArc}deg, var(--line-strong) ${ringArc}deg 360deg)`;
 
   return (
     <div className="shell">
       {/* ----------------------------------------------------------- topbar */}
       <header className="topbar">
         <div className="brand">
-          <svg className="brand-logo" viewBox="0 0 64 64" aria-hidden="true">
-            <defs>
-              <linearGradient id="aegisCopper" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stopColor="#f4b877" />
-                <stop offset="1" stopColor="#c8752f" />
-              </linearGradient>
-            </defs>
-            <path
-              d="M32 5 L57 12.5 V31 C57 45.5 46.6 55.2 32 59 C17.4 55.2 7 45.5 7 31 V12.5 Z"
-              fill="none"
-              stroke="url(#aegisCopper)"
-              strokeWidth="3"
-            />
-            <path
-              d="M32 13 L51 18.8 V31 C51 42 42.8 49.6 32 53 C21.2 49.6 13 42 13 31 V18.8 Z"
-              fill="rgba(217,142,69,0.14)"
-            />
-            <path
-              d="M21.5 33.5 L29 41 L43.5 23.5"
-              fill="none"
-              stroke="#f4b877"
-              strokeWidth="5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+          <ProofmarkLogo size={34} />
           <div className="brand-meta">
-            <span className="brand-mark">Aegis</span>
-            <span className="brand-sub">Agent insurance on {NET_LABEL}</span>
+            <span className="brand-mark">Proofmark</span>
+            <span className="brand-sub">Trust infrastructure for AI agents</span>
           </div>
         </div>
         <div className="top-actions">
@@ -1475,13 +1465,13 @@ export default function Home() {
         </div>
       </header>
 
-      {!AEGIS_ADDRESS && (
+      {!PROOFMARK_ADDRESS && (
         <div style={{ margin: "18px 0 0" }}>
           <Notice
             n={{
               status: "error",
               title: "Contract address not set",
-              detail: "Add NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS (see .env.example) and redeploy on Vercel.",
+              detail: "Add NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS (see .env.example) and redeploy on Vercel.",
             }}
           />
         </div>
@@ -1489,11 +1479,15 @@ export default function Home() {
 
       {/* ------------------------------------------------------------ hero */}
       <section className="hero">
-        {/* LEFT — risk pool overview: utilisation ring, TVL, tier bars */}
+        {/* LEFT — coverage pools: utilisation ring, capital underwriting active jobs, pool bars */}
         <div className="hero-left">
           <div className="hero-eyebrow-row">
-            <span className="hero-eyebrow">Risk pool overview</span>
+            <span className="hero-eyebrow">Coverage pools</span>
             <span className="board-tools">
+              <span className="proof-pill">
+                <span className="proof-dot" />
+                Rail active
+              </span>
               {poolsBusy && poolsSlow && (
                 <span className="ts-note">Network slow — hit Refresh when it settles</span>
               )}
@@ -1514,50 +1508,30 @@ export default function Home() {
             />
           )}
 
-          <div className="hero-shield-row">
-            <div className="big-shield">
-              <div className="shield-ring" style={{ background: ringBg }}>
-                <svg className="shield-icon-inner" width="34" height="34" viewBox="0 0 28 28" fill="none" aria-hidden="true">
-                  <path
-                    d="M14 3 L24 7 V13 C24 19 19.5 24.2 14 26 C8.5 24.2 4 19 4 13 V7 Z"
-                    stroke="#e07820"
-                    strokeWidth="1.6"
-                    fill="rgba(224,120,32,0.16)"
-                  />
-                  <path
-                    d="M9.5 14.5 L12.5 17.5 L19 11"
-                    stroke="#f7a94b"
-                    strokeWidth="2.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+          <div className="hero-gauge-row">
+            <div className="gauge-dial">
+              <div className="gauge-ring" style={{ background: ringBg }}>
+                <ProofmarkLogo size={40} />
               </div>
             </div>
             <div className="hero-numbers">
-              <div className="tvl-label">Total value locked</div>
+              <div className="tvl-label">Capital underwriting active jobs</div>
               <div className="tvl-val">
                 {tvl > 0n ? gen(tvl, 2) : poolsBusy ? "…" : "0"}
                 <span>GEN</span>
               </div>
-              <div className="tvl-sub">
-                Capital utilisation <b>{utilPct}%</b>
-                <span className="tvl-locked">
-                  {" · "}
-                  {gen(locked, 2)} GEN locked on active cover
-                </span>
-              </div>
+              <div className="tvl-sub">{gen(locked, 2)} GEN backing active jobs</div>
             </div>
           </div>
 
-          <TierBars pools={pools} tvl={tvl} />
+          <PoolBars pools={pools} tvl={tvl} />
 
           <p className="hero-addr">
-            <b>Contract</b> {AEGIS_ADDRESS ?? "not configured"}
-            {AEGIS_ADDRESS && (
+            <b>Contract</b> {PROOFMARK_ADDRESS ?? "not configured"}
+            {PROOFMARK_ADDRESS && (
               <>
                 {" · "}
-                {NET_LABEL} · non-performance insurance for agent work
+                {NET_LABEL} · conformance rail for AI agent delivery
               </>
             )}
           </p>
@@ -1571,7 +1545,7 @@ export default function Home() {
       </section>
 
       {/* -------------------------------------------- pool tiles removed here
-          (the redesign moved pool state into the hero-left TierBars board;
+          (the redesign moved pool state into the hero-left PoolBars board;
            Pools tab below still owns the deposit/withdraw workflow) */}
 
       {/* ------------------------------------------------------------ tabs */}

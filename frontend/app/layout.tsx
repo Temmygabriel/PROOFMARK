@@ -1,26 +1,26 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, Space_Mono } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import { Providers } from "./providers";
 import "./globals.css";
 
-const spaceGrotesk = Space_Grotesk({
+const geist = Geist({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-body-src",
+  variable: "--font-geist-src",
   display: "swap",
 });
 
-const spaceMono = Space_Mono({
+const geistMono = Geist_Mono({
   subsets: ["latin"],
-  weight: ["400", "700"],
-  variable: "--font-mono-src",
+  variable: "--font-geist-mono-src",
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Aegis — Agent Non-Performance Insurance",
+  title: "Proofmark — Trust Infrastructure for AI Agents",
   description:
-    "Underwrite and claim against non-performance risk in the agentic marketplace, on GenLayer.",
+    "Every AI agent job, verified on-chain. Buyers get covered if delivery " +
+    "fails. Platforms become trusted. Underwriters earn yield. Powered by " +
+    "GenLayer validator consensus.",
 };
 
 export default function RootLayout({
@@ -30,9 +30,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body
-        className={`${spaceGrotesk.variable} ${spaceMono.variable}`}
-      >
+      <body className={`${geist.variable} ${geistMono.variable}`}>
         <Providers>{children}</Providers>
       </body>
     </html>

@@ -7,11 +7,16 @@ reasoning behind decisions. Update it whenever something notable changes.
 ## 🔄 REBRAND IN PROGRESS — Aegis → Proofmark (2026-09-06)
 
 Product is being renamed **Aegis → Proofmark** across everything
-(`proofmark-rebrand-spec.md`, AEGIS root). Contract now lives at
+(`proofmark-rebrand-spec.md`, AEGIS root). Contract lives at
 `intelligent-contracts/proofmark.py` (`class Proofmark`); tests renamed
-`tests/direct/test_proofmark*.py`; e2e package → `proofmark-e2e` (Phase 1–2 done,
-commit `1133f7b`). Frontend (Phase 3) + doc renames to `PROOFMARK_*` (Phase 4) +
-AEGIS-root/review-doc sweep (Phase 5) pending. **No ABI change** — the rename
+`tests/direct/test_proofmark*.py`; e2e package → `proofmark-e2e`; **frontend fully
+rebranded (Phase 3 done, uncommitted):** Geist fonts, graphite + proof-blue design
+system (spec §2, copper/shield/navy/ALL-CAPS removed), `ProofmarkLogo`
+hexagon-check, ConformanceStamp NOT DELIVERED/DELIVERED, proof-pill, feed keys
+`proofmark.activity.v1`/`proofmark:feed`, identity key
+`proofmark.identity.pk.v1` + legacy migration, `proofmarkClient.ts` +
+`VERDICT_BOND_ATTO` + `penalty` tier. Remaining: doc renames to `PROOFMARK_*`
+(Phase 4), AEGIS-root/review-doc sweep (Phase 5). **No ABI change** — the rename
 makes a new deploy artifact, so **Phase 6 redeploys StudioNet + Bradbury to fresh
 addresses** and re-runs the live proof on the Proofmark contract. The StudioNet
 e2e **37/37** run on `0x589472da571Db60151100b153D65a7170367E17D` (2026-09-06) is
@@ -141,13 +146,15 @@ The frontend needs the address via `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS` (and
 - Identity hydration must run in a client-only `useEffect` (never during SSR),
   or the page server-renders a fresh random key every request.
 
-## Frontend preferences (user is opinionated about the UI)
+## Frontend design (user is opinionated about the UI — Proofmark tokens govern)
 
-- The first paper/ledger look was called "total bullshit." The approved
-  direction is **bold modern**: dark navy console (`#0a0e19` family) with a
-  copper (`#d98e45`/`#f4b877`) glow, glassy translucent panels, big tabular
-  numbers, and a tabbed workbench (Agents / Pools / Coverage / Claims). No raw
-  JSON dumps — actions show structured notices, lookups show key/value rows.
+- **Superseded (pre-rebrand):** the "bold modern" dark-navy `#0a0e19` console with
+  a copper `#d98e45` glow was Aegis's look. The Proofmark rebrand (spec §2)
+  **retired it** — true graphite-black `#09090b/#0e0e11/#141417`, proof blue
+  `#3b8eff` (primary), settled green `#22c97a` (delivered), breach amber
+  `#e8a020` (NOT DELIVERED), muted-red `#c96161` (penalty tier), infra-grid body,
+  Geist/Geist_Mono, sentence-case mono labels (no ALL-CAPS eyebrows), hexagon-check
+  `ProofmarkLogo` (no shield, no watermark glyph beyond a faint hexagon).
 - Keep the Vercel deployment pointed at **StudioNet**; Bradbury stays in docs.
 - Do not surprise the user with a light theme again without asking.
 

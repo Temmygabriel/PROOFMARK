@@ -2,7 +2,7 @@
 
 import { createAccount, generatePrivateKey } from "genlayer-js";
 
-// Aegis uses a browser-stored identity, not a real wallet. GenLayer studionet
+// Proofmark uses a browser-stored identity, not a real wallet. GenLayer studionet
 // transactions are signed by a genlayer-js account (an in-browser keypair) —
 // MetaMask cannot sign them directly. This is honest and clearly labeled in the
 // UI as a browser identity.
@@ -15,7 +15,13 @@ import { createAccount, generatePrivateKey } from "genlayer-js";
 // generatePrivateKey(), persist OUR copy, and restore the account by passing
 // that key back into createAccount(key).
 
-const PK_KEY = "aegis.identity.pk.v1";
+const PK_KEY = "proofmark.identity.pk.v1";
+// Legacy keys written by earlier builds of this product, before the Proofmark
+// rename. They are read once, migrated, and deleted — pure backwards
+// compatibility, not brand. (The literal key strings cannot be reworded: they
+// are the exact keys earlier builds wrote to localStorage.)
+const PK_KEY_LEGACY_V1 = "aegis.identity.pk.v1";
+const PK_KEY_LEGACY_SPECMARK = "specmark.identity.pk.v1";
 
 export type GenAccount = ReturnType<typeof createAccount>;
 
@@ -46,6 +52,18 @@ export function addressFromPk(pk: string): string | null {
 
 // Call only from the browser (inside useEffect) — never during render/SSR.
 export function loadOrCreateIdentity(): Identity {
+  if (typeof window !== "undefined") {
+    // Migrate either legacy key silently — the user never loses their identity
+    // across the rebrand.
+    const legacy =
+      window.localStorage.getItem(PK_KEY_LEGACY_V1) ||
+      window.localStorage.getItem(PK_KEY_LEGACY_SPECMARK);
+    if (legacy && !window.localStorage.getItem(PK_KEY)) {
+      window.localStorage.setItem(PK_KEY, legacy);
+      window.localStorage.removeItem(PK_KEY_LEGACY_V1);
+      window.localStorage.removeItem(PK_KEY_LEGACY_SPECMARK);
+    }
+  }
   const stored =
     typeof window !== "undefined" ? window.localStorage.getItem(PK_KEY) : null;
   if (isValidPk(stored)) {

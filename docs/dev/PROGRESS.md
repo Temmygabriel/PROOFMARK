@@ -16,6 +16,30 @@ to fresh addresses + re-run the live proof (Phase 6); (2) scope = **everything**
 (in-repo + AEGIS-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **Phase 3 — DONE (uncommitted):** full frontend rebrand. `layout.tsx` → Geist /
+  Geist_Mono (`--font-geist-src`/`--font-geist-mono-src`) + Proofmark metadata.
+  `lib/identity.ts` key → `proofmark.identity.pk.v1` + silent migration from the
+  two legacy keys (the literal key strings are spec-§1 data — the one exempted
+  §12 grep hit); `aegisClient.ts` → `proofmarkClient.ts` (`git mv`),
+  `PROOFMARK_ADDRESS`/`NEXT_PUBLIC_PROOFMARK_*`, `CLAIM_BOND_ATTO` →
+  `VERDICT_BOND_ATTO`, `penalty` tier added (1200 bps, muted-red). `globals.css`
+  re-themed to spec §2 (graphite `#09090b/#0e0e11/#141417`, proof blue / ok green /
+  breach amber / penalty muted-red; copper + shield + navy + ALL-CAPS removed;
+  infra grid body; sentence-case mono labels); stamp 84px −5° + `stampLand`,
+  `not-delivered` amber / `delivered` green; `proof-pill` "Rail active";
+  `shield*` → `gauge*`; chips re-mapped to the derivePolicyState labels.
+  `page.tsx`: `ProofmarkLogo` topbar + hero ring, brand/sub, eyebrow "Coverage
+  pools", "Capital underwriting active jobs", `{X} GEN backing active jobs`,
+  tabs Agents·Coverage·Pools·**Verdicts**, panels "Back a job" / "Job record" /
+  "Request verdict" / "Underwrite" / "Add capital" / "Withdraw capital",
+  `ConformanceStamp` NOT DELIVERED/DELIVERED + "covered"/"bond returned",
+  feed keys `proofmark.activity.v1` + `proofmark:feed`, microcopy sweep
+  (insure→back, payout→coverage in the verdict prose). `IdentityBadge` honesty
+  notice. package.json/lock → `proofmark-frontend`. `frontend/README.md`
+  rewritten to the real product. **Gates: esbuild TSX parse clean on all
+  app/components/lib sources (`.esbuild-check/`); §12 grep shows **zero** brand
+  tokens in ts/tsx/css/json except the 2 mandated legacy-key literals in
+  `identity.ts`** (md docs still Aegis until Phase 4).**
 - **Phase 2 — DONE (uncommitted):** e2e harness rebranded — `run.js`/`seed-live.js`/
   `verify-payments.js` headers + `CONTRACT_PATH`→`proofmark.py`, mirrors →
   `lib/proofmarkClient.ts` / `test_proofmark.py`, deploy label, `package.json` +
@@ -34,14 +58,16 @@ Phase state (newest first):
   `0x589472da571Db60151100b153D65a7170367E17D` — recorded as the *pre-rename
   validation*).
 
-Next: **Phase 3** frontend rebrand (Geist fonts, globals.css token/stamp/pill
-replacement, `page.tsx` copy/logo/tabs **Verdicts**/status chips, `lib/identity.ts`
-key migration, `aegisClient.ts→proofmarkClient.ts` + `penalty` tier +
-`VERDICT_BOND_ATTO`, `IdentityBadge`, `ProofmarkLogo.tsx`, package →
-`proofmark-frontend`, esbuild TSX gate). Then Phase 4 doc renames to
-`PROOFMARK_*`, Phase 5 AEGIS-root + SECURITY-CHECK sweep, **Phase 6 redeploy +
-re-proof** (fresh StudioNet + Bradbury addresses, e2e + verify-payments + judged
-claim + seed), Phase 7 evidence + Vercel env manual step
+Next: **Phase 4** — `git mv` the six in-repo docs to `PROOFMARK_*`
+(`CONTRACT.md`, `DEPLOYMENT.md`, `UX_FLOW.md`, `dev/E2E_REPORT.md`,
+`dev/PROGRESS.md`, `dev/PROJECT_MEMORY.md`), sweep cross-links/file-path refs
+(`proofmark.py`, `test_proofmark.py`, `PROOFMARK_*`), rewrite repo-root
+`README.md`, and mark the 2026-09-06 `0x5894…` 37/37 run as the pre-rename Shape
+B validation (live tables stay reserved for the Phase 6 hashes). Then Phase 5
+AEGIS-root + SECURITY-CHECK sweep, **Phase 6 redeploy + re-proof** (fresh
+StudioNet + Bradbury addresses, e2e 37/37 + verify-payments + judged claim +
+re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
+`SEED_ACTIVITY`), Phase 7 evidence + Vercel env manual step
 (`NEXT_PUBLIC_PROOFMARK_*`).
 
 ## Status (2026-09-03)

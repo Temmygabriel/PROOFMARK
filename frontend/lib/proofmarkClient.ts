@@ -9,9 +9,9 @@ import type { GenAccount } from "./identity";
 // Network selection
 // ---------------------------------------------------------------------------
 // Point the frontend at whichever network your contract is deployed on via
-// NEXT_PUBLIC_AEGIS_NETWORK. Accepts the CLI-style dashed name or the
+// NEXT_PUBLIC_PROOFMARK_NETWORK. Accepts the CLI-style dashed name or the
 // genlayer-js Network string; anything else falls back to studionet.
-const NETWORK_RAW = (process.env.NEXT_PUBLIC_AEGIS_NETWORK ?? "studionet").trim();
+const NETWORK_RAW = (process.env.NEXT_PUBLIC_PROOFMARK_NETWORK ?? "studionet").trim();
 export const NETWORK_NAME: "studionet" | "testnetBradbury" =
   NETWORK_RAW === "testnet-bradbury" || NETWORK_RAW === "testnetBradbury"
     ? "testnetBradbury"
@@ -20,23 +20,30 @@ const CHAIN = NETWORK_NAME === "testnetBradbury" ? testnetBradbury : studionet;
 
 // Contract address comes from Vercel env at build/runtime -- see .env.example.
 // This is the one thing you change per deployment; nothing else in this file
-// should need to change to point at a different Aegis deployment.
-export const AEGIS_ADDRESS = process.env
-  .NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS as `0x${string}` | undefined;
+// should need to change to point at a different Proofmark deployment.
+export const PROOFMARK_ADDRESS = process.env
+  .NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS as `0x${string}` | undefined;
 
-// Fixed contract constants (mirrors aegis.py -- keep these two in sync if the
+// Fixed contract constants (mirrors proofmark.py -- keep these two in sync if the
 // contract's constants ever change).
-export const CLAIM_BOND_ATTO = 2n * 10n ** 18n;
-export const VALID_TIERS = ["unrated", "bronze", "silver", "gold"] as const;
+export const VERDICT_BOND_ATTO = 2n * 10n ** 18n;
+export const VALID_TIERS = [
+  "unrated",
+  "bronze",
+  "silver",
+  "gold",
+  "penalty",
+] as const;
 export type Tier = (typeof VALID_TIERS)[number];
 
-/** Premium rate in basis points per tier (mirrors RATE_BPS_BY_TIER in aegis.py).
+/** Premium rate in basis points per tier (mirrors RATE_BPS_BY_TIER in proofmark.py).
  * 1 bps = 0.01% of coverage. Keep in sync if the contract's constants change. */
 export const RATE_BPS_BY_TIER: Record<Tier, number> = {
   unrated: 600,
   bronze: 400,
   silver: 250,
   gold: 150,
+  penalty: 1200,
 };
 
 /** Read-only client -- talks directly to the network's RPC, no wallet needed. */
@@ -55,13 +62,13 @@ export function getWriteClient(account: GenAccount) {
 }
 
 function requireAddress(): `0x${string}` {
-  if (!AEGIS_ADDRESS) {
+  if (!PROOFMARK_ADDRESS) {
     throw new Error(
-      "NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS is not set. Add it as an environment " +
+      "NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS is not set. Add it as an environment " +
         "variable (see .env.example) and redeploy."
     );
   }
-  return AEGIS_ADDRESS;
+  return PROOFMARK_ADDRESS;
 }
 
 async function read<T = any>(functionName: string, args: any[] = []): Promise<T> {
@@ -214,7 +221,7 @@ export function getLpPosition(tier: Tier, address: string) {
 // ---------------------------------------------------------------------------
 
 export function fileClaim(account: GenAccount, jobId: string) {
-  return write(account, "file_claim", [jobId], CLAIM_BOND_ATTO);
+  return write(account, "file_claim", [jobId], VERDICT_BOND_ATTO);
 }
 
 export function getClaimStatus(jobId: string) {
