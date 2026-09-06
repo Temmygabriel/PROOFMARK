@@ -16,8 +16,8 @@ hexagon-check, ConformanceStamp NOT DELIVERED/DELIVERED, proof-pill, feed keys
 `proofmark.activity.v1`/`proofmark:feed`, identity key
 `proofmark.identity.pk.v1` + legacy migration, `proofmarkClient.ts` +
 `VERDICT_BOND_ATTO` + `penalty` tier. In-repo docs renamed to `PROOFMARK_*` and
-swept to grep-zero (Phase 4 done). Next: project-root/review-doc sweep
-(Phase 5). **No ABI change** — the rename
+project-root deliverables brand-swept to grep-zero (Phases 4–5 done).
+**No ABI change** — the rename
 makes a new deploy artifact, so **Phase 6 redeploys StudioNet + Bradbury to fresh
 addresses** and re-runs the live proof on the Proofmark contract. The StudioNet
 e2e **37/37** run on `0x589472da571Db60151100b153D65a7170367E17D` (2026-09-06) is

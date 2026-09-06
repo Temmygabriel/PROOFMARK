@@ -17,6 +17,16 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **Phase 5 (content sweep) — DONE:** project-root deliverables brand-swept to
+  grep-zero — `proofmark-submission-note.md`, demo run-sheet, demo caption
+  cards, `SECURITY-CHECK/*.md`. Product-name prose → Proofmark; file-path refs
+  → `proofmark.py` / `proofmarkClient.ts`; technical findings kept verbatim;
+  repo URL corrected to `github.com/Temmygabriel/proofmark`; Vercel URL
+  placeholders marked for the Phase 7 deploy; the §03 description recount is
+  in-file (989 chars, fits). Exempt by design: `proofmark-rebrand-spec.md`
+  (the rename authority — its mapping tables must keep the old names) and
+  `.claude/settings.local.json` (machine paths + allowlist). Canonical
+  addresses/URLs in these docs refresh after the Phase 6 redeploy.
 - **Phase 4 — DONE:** in-repo docs rebrand. Six docs renamed via `git mv` to
   `PROOFMARK_CONTRACT.md` / `PROOFMARK_DEPLOYMENT.md` / `PROOFMARK_UX_FLOW.md` /
   `PROOFMARK_E2E_REPORT.md` / `PROOFMARK_PROGRESS.md` /
@@ -71,14 +81,14 @@ Phase state (newest first):
   `0x589472da571Db60151100b153D65a7170367E17D` — recorded as the *pre-rename
   validation*).
 
-Next: **Phase 5** — brand-sweep the project-root deliverables
-(`proofmark-submission-note.md`, demo plan/captions, genlayer playbook/manual,
-project-explorer submission) + `SECURITY-CHECK/*.md` (product-name prose →
-Proofmark; technical findings verbatim). Then **Phase 6 redeploy + re-proof**
-(fresh StudioNet + Bradbury addresses, e2e 37/37 + verify-payments + judged
-claim + re-seed, bake new address + seed jobs into `page.tsx`
-`SEEDED_CONTRACT`/`SEED_ACTIVITY`), Phase 7 evidence + Vercel env manual step
-(`NEXT_PUBLIC_PROOFMARK_*`).
+Next: **Phase 6 — redeploy + re-proof** on the rebranded contract. StudioNet:
+deploy `intelligent-contracts/proofmark.py` to a fresh address, read-verify,
+run the full e2e (37/37) + `verify-payments.js`, reconcile the pinned S3
+objects to a gateway-fetchable CID for the judged (V3) claim if possible, then
+`seed-live.js` and bake the new `SEEDED_CONTRACT`/`SEED_ACTIVITY` into
+`page.tsx` (esbuild gate). Bradbury: deploy-only to a fresh address. Then
+Phase 7 evidence + manual Vercel env rename (`NEXT_PUBLIC_PROOFMARK_*`) +
+URL refresh in the project-root deliverables.
 
 ## Status (2026-09-03)
 
