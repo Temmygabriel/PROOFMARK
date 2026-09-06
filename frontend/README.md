@@ -30,7 +30,7 @@ directory before pushes.
 
 ## Deploying: GitHub → Vercel
 
-1. **Push this repo** (the whole `aegis-repo`, not just this folder) to GitHub.
+1. **Push this repo** (the whole repository, not just this folder) to GitHub.
 
 2. **Import it in Vercel:**
    - vercel.com → *Add New* → *Project* → import the GitHub repo.

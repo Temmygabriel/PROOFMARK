@@ -27,7 +27,7 @@ const RESULTS_DIR = path.join(__dirname, "results");
 const CONTRACT_PATH = path.join(__dirname, "..", "intelligent-contracts", "proofmark.py");
 
 // ---------------------------------------------------------------------------
-// Networks (default canonical addresses come from docs/DEPLOYMENT.md)
+// Networks (default canonical addresses come from docs/PROOFMARK_DEPLOYMENT.md)
 // ---------------------------------------------------------------------------
 const NETS = {
   studionet: {

@@ -1,4 +1,4 @@
-# Aegis — Deployment Guide
+# Proofmark — Deployment Guide
 
 Where the contract is deployed, how to deploy it again, and how to verify a
 deployment actually succeeded.
@@ -11,7 +11,7 @@ deployment actually succeeded.
 | Testnet Bradbury | 4221 | `0x79C15889D5070321176994373C440778a9eC47c1` | 2026-09-03 | deploy verified by reads (no full e2e on Bradbury — StudioNet covers the scenario) |
 
 > These are the **canonical, latest** addresses — both deployed 2026-09-03 from
-> the **Shape A hardened** `intelligent-contracts/aegis.py` (self-buy ban, epoch
+> the **Shape A hardened** `intelligent-contracts/proofmark.py` (self-buy ban, epoch
 > deadline compare + 60 s minimum horizon, coverage capped to 10% of the tier
 > pool). The prior generation (`0xED90…` StudioNet, `0xcBF4…` Bradbury,
 > deployed 2026-09-02) runs the unpatched source and should **not** be used.
@@ -41,16 +41,16 @@ The Next.js frontend reads these at build time (set them in Vercel). The live
 Vercel deployment points at **StudioNet** (gasless):
 
 ```env
-NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS=0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4
-NEXT_PUBLIC_AEGIS_NETWORK=studionet
+NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4
+NEXT_PUBLIC_PROOFMARK_NETWORK=studionet
 ```
 
 If you'd rather run the frontend against **Bradbury** (no rate limits), swap in
 its deployment instead — both are verified live:
 
 ```env
-NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS=0x79C15889D5070321176994373C440778a9eC47c1
-NEXT_PUBLIC_AEGIS_NETWORK=testnet-bradbury
+NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x79C15889D5070321176994373C440778a9eC47c1
+NEXT_PUBLIC_PROOFMARK_NETWORK=testnet-bradbury
 ```
 
 Network values follow the `genlayer-js/chains` names: `studionet`,
@@ -68,7 +68,7 @@ genlayer network set studionet            # gasless, but rate-limited
 genlayer network set testnet-bradbury     # needs GEN in the account
 
 # 2. Deploy from the repo root
-genlayer deploy --contract intelligent-contracts/aegis.py
+genlayer deploy --contract intelligent-contracts/proofmark.py
 
 # 3. Record the returned Contract Address + Transaction Hash
 ```

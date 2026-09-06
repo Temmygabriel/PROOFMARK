@@ -1,7 +1,7 @@
-# Aegis — Intelligent Contract
+# Proofmark — Intelligent Contract
 
 Single-file GenLayer intelligent contract:
-[`intelligent-contracts/aegis.py`](../intelligent-contracts/aegis.py)
+[`intelligent-contracts/proofmark.py`](../intelligent-contracts/proofmark.py)
 
 **What it is:** non-performance insurance for the AI-agent marketplace. A buyer
 pays a premium to insure a job against a specific agent; if the agent never
@@ -82,11 +82,11 @@ shares, and the deadline logic are all deterministic.
 
 Every hardening here was either required by an earlier review pass or discovered
 during a direct-mode security review (2026-09-02) and fixed. Each is covered by a
-regression test in `tests/direct/test_aegis.py`. Items 7, 9 and 10 are the
+regression test in `tests/direct/test_proofmark.py`. Items 7, 9 and 10 are the
 2026-09-03 "Shape A" pass — the response to the reviewer-facing self-dealing
 review. Items 11–18 are the 2026-09-05 "Shape B" pass from the three-pass
 adversarial review in `SECURITY-CHECK/`. Shape B supersedes Shape A; the Shape A
-deploys are marked DO NOT USE (see DEPLOYMENT.md).
+deploys are marked DO NOT USE (see PROOFMARK_DEPLOYMENT.md).
 
 1. **Canonical identity keys.** `agent_id` / `job_id` are user-typed strings with
    no external registry. `_normalize_key()` lowercases + strips them before use as
@@ -153,7 +153,7 @@ deploys are marked DO NOT USE (see DEPLOYMENT.md).
 
 Items 11+ are the "Shape B" hardening pass (2026-09-05), driven by a
 three-pass adversarial review of Shape A. Each maps to a regression test in
-`tests/direct/test_aegis.py`.
+`tests/direct/test_proofmark.py`.
 
 11. **Deliverable freeze after the deadline (FIX-01).** `submit_deliverable`
     reverts once the deadline has passed — an agent can't retroactively "find"
@@ -230,10 +230,10 @@ three-pass adversarial review of Shape A. Each maps to a regression test in
 
 ## Testing
 
-- **Direct mode (fast, in-memory):** `python -m pytest tests/direct/test_aegis.py -v`
+- **Direct mode (fast, in-memory):** `python -m pytest tests/direct/test_proofmark.py -v`
   — 46 tests covering every method plus the gaming vectors above (28 Shape A
   tests adapted to the Shape B state machine + 18 new regression tests). Direct
   mode runs the leader half only, so FIX-10's validator containment is verified
   structurally + by lint, not executed here.
-- **On-chain smoke:** see [DEPLOYMENT.md](DEPLOYMENT.md) for the read/write
+- **On-chain smoke:** see [PROOFMARK_DEPLOYMENT.md](PROOFMARK_DEPLOYMENT.md) for the read/write
   verification run against both networks.

@@ -1,26 +1,38 @@
-# Aegis — Progress Log
+# Proofmark — Progress Log
 
 Running log of investigation, testing, fixes, and deployment. Newest first
 within each section; keep this updated as work happens.
 
-## 🔄 REBRAND IN PROGRESS — Aegis → **Proofmark** (2026-09-06)
+## Rebrand banner — Proofmark (2026-09-06)
 
-The whole product is being rebranded to **Proofmark** per
-`proofmark-rebrand-spec.md` (AEGIS root): contract, frontend, tests, docs, e2e,
-design system, copy. **This file is renamed `PROOFMARK_PROGRESS.md` in Phase 4**;
-historical entries below stay as-is until then. Repo folder is still `aegis-repo`
-(local); **the GitHub repo was renamed to `proofmark` by the user — origin URL is
-NOT to be touched** (GitHub redirects it; pushes still work). Two locked decisions:
-(1) the contract rename → **new deploy artifact** → redeploy StudioNet + Bradbury
-to fresh addresses + re-run the live proof (Phase 6); (2) scope = **everything**
-(in-repo + AEGIS-root deliverables + SECURITY-CHECK review docs).
+The whole product has been rebranded to **Proofmark** per
+`proofmark-rebrand-spec.md` (project root, outside this repo): contract,
+frontend, tests, docs, e2e, design system, copy. Entries below that predate the
+rename describe the product under its old working name and are kept as history.
+The local checkout folder still carries its pre-rename name; the GitHub repo was
+renamed to `proofmark` by the user — origin URL is NOT to be touched (GitHub
+redirects it; pushes still work). Two locked decisions: (1) the contract rename
+→ **new deploy artifact** → redeploy StudioNet + Bradbury to fresh addresses +
+re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
+project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
-- **Phase 3 — DONE (uncommitted):** full frontend rebrand. `layout.tsx` → Geist /
+- **Phase 4 — DONE:** in-repo docs rebrand. Six docs renamed via `git mv` to
+  `PROOFMARK_CONTRACT.md` / `PROOFMARK_DEPLOYMENT.md` / `PROOFMARK_UX_FLOW.md` /
+  `PROOFMARK_E2E_REPORT.md` / `PROOFMARK_PROGRESS.md` /
+  `PROOFMARK_PROJECT_MEMORY.md`; cross-links + file-path refs swept to
+  `proofmark.py` / `test_proofmark.py` / `PROOFMARK_*`; repo-root `README.md`
+  rewritten to the Proofmark positioning; the 2026-09-06 `0x5894…` 37/37 run is
+  recorded as the pre-rename Shape B validation; live deploy tables stay reserved
+  for the Phase 6 hashes. **Gate: §12 grep over repo source (ts/tsx/css/py/json/
+  md) returns zero** — the sole exemption is the two mandated legacy-key
+  literals in `identity.ts`. This log and PROOFMARK_PROJECT_MEMORY swept to
+  grep-zero.
+- **Phase 3 — DONE (commit `191e657`):** full frontend rebrand. `layout.tsx` → Geist /
   Geist_Mono (`--font-geist-src`/`--font-geist-mono-src`) + Proofmark metadata.
   `lib/identity.ts` key → `proofmark.identity.pk.v1` + silent migration from the
   two legacy keys (the literal key strings are spec-§1 data — the one exempted
-  §12 grep hit); `aegisClient.ts` → `proofmarkClient.ts` (`git mv`),
+  §12 grep hit); client module renamed to `proofmarkClient.ts` (`git mv`),
   `PROOFMARK_ADDRESS`/`NEXT_PUBLIC_PROOFMARK_*`, `CLAIM_BOND_ATTO` →
   `VERDICT_BOND_ATTO`, `penalty` tier added (1200 bps, muted-red). `globals.css`
   re-themed to spec §2 (graphite `#09090b/#0e0e11/#141417`, proof blue / ok green /
@@ -37,19 +49,20 @@ Phase state (newest first):
   (insure→back, payout→coverage in the verdict prose). `IdentityBadge` honesty
   notice. package.json/lock → `proofmark-frontend`. `frontend/README.md`
   rewritten to the real product. **Gates: esbuild TSX parse clean on all
-  app/components/lib sources (`.esbuild-check/`); §12 grep shows **zero** brand
-  tokens in ts/tsx/css/json except the 2 mandated legacy-key literals in
-  `identity.ts`** (md docs still Aegis until Phase 4).**
-- **Phase 2 — DONE (uncommitted):** e2e harness rebranded — `run.js`/`seed-live.js`/
+  app/components/lib sources (`.esbuild-check/`); §12 grep shows zero brand
+  tokens in ts/tsx/css/json except the two mandated legacy-key literals in
+  `identity.ts`** (md docs swept in Phase 4).
+- **Phase 2 — DONE (commit `82c3f58`):** e2e harness rebranded — `run.js`/`seed-live.js`/
   `verify-payments.js` headers + `CONTRACT_PATH`→`proofmark.py`, mirrors →
   `lib/proofmarkClient.ts` / `test_proofmark.py`, deploy label, `package.json` +
   `package-lock.json` name → `proofmark-e2e` + description. `node --check` clean on
-  all 4 scripts; no Aegis/war-room tokens left in harness sources. (No ABI/method
+  all 4 scripts; no pre-rebrand brand tokens left in harness sources. (No ABI/method
   name change — `run.js` e2e method calls untouched, spec §11.)
-- **Phase 1 — DONE (commit `1133f7b`):** `git mv aegis.py→proofmark.py`,
-  `test_aegis.py→test_proofmark.py`, `test_smoke.py→test_proofmark_smoke.py`;
-  module docstring → Proofmark trust-infrastructure positioning (spec §8),
-  `class Aegis` → `class Proofmark`, all 47 deploy-path + docstring-header refs
+- **Phase 1 — DONE (commit `1133f7b`):** `git mv` the contract source to
+  `proofmark.py`, the direct-mode test to `test_proofmark.py`, the smoke test to
+  `test_proofmark_smoke.py`; module docstring → Proofmark trust-infrastructure
+  positioning (spec §8), contract class `Proofmark`, all 47 deploy-path +
+  docstring-header refs
   updated; `intelligent-contracts/README.md` rewritten (deploy table marked
   *pending Phase 6 redeploy*). **Gates: `genvm-lint` clean (Contract: Proofmark,
   17 methods); `pytest tests/direct/` 47/47 PASS.**
@@ -58,16 +71,13 @@ Phase state (newest first):
   `0x589472da571Db60151100b153D65a7170367E17D` — recorded as the *pre-rename
   validation*).
 
-Next: **Phase 4** — `git mv` the six in-repo docs to `PROOFMARK_*`
-(`CONTRACT.md`, `DEPLOYMENT.md`, `UX_FLOW.md`, `dev/E2E_REPORT.md`,
-`dev/PROGRESS.md`, `dev/PROJECT_MEMORY.md`), sweep cross-links/file-path refs
-(`proofmark.py`, `test_proofmark.py`, `PROOFMARK_*`), rewrite repo-root
-`README.md`, and mark the 2026-09-06 `0x5894…` 37/37 run as the pre-rename Shape
-B validation (live tables stay reserved for the Phase 6 hashes). Then Phase 5
-AEGIS-root + SECURITY-CHECK sweep, **Phase 6 redeploy + re-proof** (fresh
-StudioNet + Bradbury addresses, e2e 37/37 + verify-payments + judged claim +
-re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
-`SEED_ACTIVITY`), Phase 7 evidence + Vercel env manual step
+Next: **Phase 5** — brand-sweep the project-root deliverables
+(`proofmark-submission-note.md`, demo plan/captions, genlayer playbook/manual,
+project-explorer submission) + `SECURITY-CHECK/*.md` (product-name prose →
+Proofmark; technical findings verbatim). Then **Phase 6 redeploy + re-proof**
+(fresh StudioNet + Bradbury addresses, e2e 37/37 + verify-payments + judged
+claim + re-seed, bake new address + seed jobs into `page.tsx`
+`SEEDED_CONTRACT`/`SEED_ACTIVITY`), Phase 7 evidence + Vercel env manual step
 (`NEXT_PUBLIC_PROOFMARK_*`).
 
 ## Status (2026-09-03)
@@ -86,15 +96,16 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
   Live board **re-seeded** to the §05 numbers on the new StudioNet contract
   (Unrated 10.06 / locked 1.00, Bronze 5, Silver 3, Gold 2; seed ids
   `agent-live-1788435546808` / `job-live-1788435546808`). Frontend seed gate,
-  `frontend/.env.example` and `docs/DEPLOYMENT.md` re-pointed (`de3d242`,
+  `frontend/.env.example` and `docs/PROOFMARK_DEPLOYMENT.md` re-pointed (`de3d242`,
   parse gate clean). Remaining disclosed residual (two-wallet drip, bronze
   breach-rate gate) and the judged-path QA gap are recorded in the Final
   review section below. **One user action left:** flip the Vercel
-  `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS` to `0x605e5B…` and redeploy the project
+  env var to `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS = 0x605e5B…` and redeploy
+  the project
   (no local CLI token).
 
 - **Done (submission + demo docs rewritten to the final UI; working folder
-  cleaned):** `aegis-submission-note.md` rewritten in the Rigor style
+  cleaned):** the submission note was rewritten in the Rigor style
   (`genlayer-project-explorer-submission.md` in the same folder): a simple §05
   reviewer path (Steps 1–7) aligned to the shipped war-room labels (Risk pool
   overview, Recent activity, Get quote / Issue policy, Policy status chips
@@ -103,8 +114,8 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
   (arrows/checks/backticks/blockquotes) stripped from the body. The feed no
   longer "starts empty": §05 and the demo plan say the Recent activity panel
   opens with the seeded history and the demo's own writes stack above.
-  `aegis-demo-plan.md` rebuilt as a plain run-sheet keyed to §05 with a
-  copy-paste values block; `aegis-demo-captions.md` cleaned to plain short
+  The demo plan was rebuilt as a plain run-sheet keyed to §05 with a
+  copy-paste values block; the demo captions cleaned to plain short
   cards. Superseded/implemented docs (old demo-script, submission-draft,
   ui-redesign, ui-ux-recommendations, wallet-integration) moved to `archive/`
   with a README; top level now holds only the live doc set + the mock + the
@@ -112,14 +123,14 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
 - **Done (feed backfill on the seeded live board):** "Recent activity" read
   empty on any fresh browser because the feed only logs *this-browser* writes
   and the seeded chain activity came from `seed-live.js`'s Node wallet. On the
-  canonical seeded StudioNet deploy only (`AEGIS_ADDRESS` == `0xED90…`),
+  canonical seeded StudioNet deploy only (`PROOFMARK_ADDRESS` == `0xED90…`),
   `seedFeedOnce()` in `page.tsx` now replays the six REAL seed transactions
   (register `agent-live-1788422271884`, LP 10/5/3/2 GEN into Unrated/Bronze/
   Silver/Gold, 1 GEN cover on `job-live-1788422271884`) into a first-load feed,
   timestamped at the actual seed run (the ids embed `Date.now()`); the browser's
   own confirmed writes then stack above. Any other network/address stays
   local-only. Parse gate clean; pushed for the live build.
-- **Done (mock-exact war-room UI, aligning `aegis_redesign_mockup.html`):**
+- **Done (mock-exact war-room UI, aligning the redesign mockup):**
   implemented on `app/page.tsx` + `app/globals.css`. The marketing
   hero-lead/headline block is gone — the page now opens on the two-panel war
   room (`1fr 340px` grid): **left** = "Risk pool overview" eyebrow + Refresh /
@@ -145,11 +156,11 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
 - **Next:** confirm the live build reads like the mock (war-room hero, TVL ring
   + bars + feed, Coverage default, quote-box + policy card, verdict strip) and
   the feed now shows the seeded history on a fresh profile; then the demo-docs
-  sync (`aegis-demo-plan.md`, `aegis-submission-note.md`, captions) against the
+  sync (demo plan, submission note, captions) against the
   final on-screen labels — note the demo plan's "feed starts empty" pre-flight
   line flips to "feed opens with the seeded history, your actions stack above"
   — and the folder cleanup of the similar working docs.
-- **Done (war-room redesign):** implemented `aegis-ui-redesign.md` on
+- **Done (war-room redesign):** implemented the then-current UI-redesign note on
   `layout.tsx` (Space Grotesk + Space Mono replace Fraunces/IBM Plex),
   `globals.css` (darker `#07090f` bg + tighter radial glows, new copper
   `#e07820` + cold-green `#38e89a` verdict tokens, 8/6/6 px radii, then the
@@ -174,9 +185,9 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
   (instant auto-breach via past deadline). Contract lints clean.
 - **Done (reviewer-proof e2e):** StudioNet **28/28 PASS** on the canonical
   deploy; Bradbury **1 GEN roundtrip 7/7 PASS** (cost-safe). Full report in
-  `docs/dev/E2E_REPORT.md`; canonical addresses in
+  `docs/dev/PROOFMARK_E2E_REPORT.md`; canonical addresses in
   `intelligent-contracts/README.md`.
-- **Done (UI/UX review round):** implemented the `aegis-ui-ux-recommendations.md`
+- **Done (UI/UX review round):** implemented the then-current UI/UX-recommendations
   items that matter — fresh-quote-then-confirm issue flow, empty-pool buyer gate,
   policy review step, derived policy status, consensus elapsed hint, Claims
   role grouping, IdentityBadge type-DELETE confirm, MetaMask mute, tier rates on
@@ -194,9 +205,9 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
 ## What's been done
 
 ### UI/UX review round — 19-item recommendations, implemented (2026-09-02)
-- Worked from `aegis-ui-ux-recommendations.md` against the live frontend
+- Worked from the UI/UX-recommendations note against the live frontend
   (`app/page.tsx`, `app/globals.css`, `components/IdentityBadge.tsx`,
-  `lib/aegisClient.ts`). No on-chain behavior changed — all edits are UX/flow.
+  and the client module). No on-chain behavior changed — all edits are UX/flow.
 - **Critical fixes:** `doIssue()` re-quotes at pay time (a stale tier can never
   fire a wrong-premium revert); empty-pool is pre-checked via `get_pool_info`
   → targeted "Fund the {tier} pool" notice + button that jumps to the Pools
@@ -220,7 +231,7 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
   localStorage surface for little reviewer value and real edge-case risk;
   #18 (zero-display) already reads consistently as `0 GEN` / `—`.
 - Files: `frontend/app/page.tsx`, `frontend/app/globals.css`,
-  `frontend/components/IdentityBadge.tsx`, `frontend/lib/aegisClient.ts`.
+  `frontend/components/IdentityBadge.tsx`, `frontend/lib/proofmarkClient.ts`.
   **Pending visual confirmation on the Vercel build** (no local `next build`
   on this 8 GB machine).
 
@@ -247,7 +258,7 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
   the `genlayer` CLI cannot attach `value` to contract writes, so payable calls
   (deposit / issue_policy / file_claim) need an SDK path. Subcommands:
   `keys | deploy | probe | e2e [--network …] [--address …]`. Deterministic 28-step
-  scenario mirroring `tests/direct/test_aegis.py`, with **unique policy keys per
+  scenario mirroring `tests/direct/test_proofmark.py`, with **unique policy keys per
   run** and amounts asserted in GEN.
 - **Revert detection fixed (was a false-positive bug):** a reverted StudioNet
   call still finalizes ACCEPTED/FINALIZED with `result_name=MAJORITY_AGREE`. The
@@ -280,18 +291,18 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
   before spending faucet GEN. Cost-safe Bradbury plan in task #6.
 
 ### Wallet integration — honest browser identity (2026-09-02)
-- Implemented `aegis-wallet-integration.md` (design distilled from the Rigor
-  frontend). Replaced the MetaMask "Connect wallet" flow with a browser
+- Implemented the wallet-integration note (now in `archive/`; design distilled
+  from the Rigor frontend). Replaced the MetaMask "Connect wallet" flow with a browser
   **identity chip** — because GenLayer studionet tx are signed locally by a
   genlayer-js keypair, and MetaMask can't sign them. The UI says so plainly.
-- New `frontend/lib/identity.ts` (`aegis.identity.pk.v1` key in localStorage;
+- New `frontend/lib/identity.ts` (localStorage identity key;
   generate/import/reset helpers; works around the viem private-key trap by
   persisting our own copy of the key, not `account.privateKey` which is
   `undefined`), `frontend/app/providers.tsx` (identity context, client-only
   hydration), `frontend/components/IdentityBadge.tsx` (chip + dropdown: address
   + copy, honesty notice, show/copy private key, import-from-key with live
   "Recovers: 0x…" preview, MetaMask display-only, generate-new danger).
-- `frontend/lib/aegisClient.ts`: write client now signs with the Account object
+- `frontend/lib/proofmarkClient.ts`: write client now signs with the Account object
   (`createClient({ chain, account })`, no provider, no `.connect()`); dropped
   `connectWallet`. `writeContract` always passes `value` (0n when nothing
   moves) because genlayer-js 1.2.0 types require it and its local-account path
@@ -316,23 +327,23 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
 - Wallet connect lives in the topbar and is shared by every tab.
 
 ### Investigation
-- Read the whole repo: contract (`aegis.py`), frontend (`app/page.tsx`,
-  `lib/aegisClient.ts`), `README.md`, `docs/UX_FLOW.md`.
-- Identified duplicate stale files: `frontend/aegisClient.ts` and
-  `frontend/page.tsx` are exact copies of `frontend/lib/aegisClient.ts` and
-  `frontend/app/page.tsx` — dead code, to be removed before pushing.
+- Read the whole repo: the contract source, frontend (`app/page.tsx`, the
+  client module), `README.md`, `docs/PROOFMARK_UX_FLOW.md`.
+- Identified duplicate stale files at the `frontend/` root (top-level copies of
+  the client module and of `app/page.tsx`) — dead code, to be removed before
+  pushing.
 - Frontend hardcodes `studionet`; needs to be network-aware for Bradbury.
 
 ### Toolchain setup (Windows 8GB machine)
 - genlayer CLI 0.37.1 present; current network = testnet-bradbury, account
   "default" unlocked with ~73.9 GEN.
 - Patched `gltest/direct/loader.py` Windows temp-file bug so direct tests run
-  (see PROJECT_MEMORY.md).
+  (see PROOFMARK_PROJECT_MEMORY.md).
 - `genvm-lint check` → **lint passed**; validate blocked by SDK 404 (env issue).
 - Confirmed pytest 9.1.1 + genlayer-test 0.29.2 work. Smoke test passed.
 
 ### Tests
-- Wrote `tests/direct/test_aegis.py` covering registration, LP deposit/withdraw,
+- Wrote `tests/direct/test_proofmark.py` covering registration, LP deposit/withdraw,
   policy issuance, deliverable submission, claims (deterministic + judged), and
   tier promotion / gaming vectors.
 - **Result:** 26 passed in ~2.8s (after the deadline-guard fix), including the
@@ -356,7 +367,7 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
 - `genvm-lint validate` still blocked by SDK 404 (environment, not the
   contract) — deployment + tests are the authoritative validation.
 - Frontend is network- and address-driven by env vars
-  (`NEXT_PUBLIC_AEGIS_NETWORK`, `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS`). Live
+  (`NEXT_PUBLIC_PROOFMARK_NETWORK`, `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS`). Live
   Vercel env points at StudioNet; after the 2026-09-03 Shape A redeploy the
   env must be **flipped to `0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4`** and
   the project redeployed (no local CLI token — dashboard action).
@@ -393,14 +404,14 @@ re-seed, bake new address + seed jobs into `page.tsx` `SEEDED_CONTRACT`/
 
 ## Final proactive review (2026-09-03) + Shape A patch + redeploy
 
-Adversarial re-read of `aegis.py` for every "reviewer could reject this" angle
+Adversarial re-read of the contract source for every "reviewer could reject this" angle
 (sybil, gamed logic, economic drain, honest-claims accuracy), plus a test-suite
 reconfirmation. Finding 1 below (self-deal auto-breach drain) was **patched the
-same day — Shape A** (see `docs/CONTRACT.md` items 7/9/10) — and both contracts
-were **redeployed to fresh canonical addresses** (`docs/DEPLOYMENT.md`): StudioNet
+same day — Shape A** (see `docs/PROOFMARK_CONTRACT.md` items 7/9/10) — and both contracts
+were **redeployed to fresh canonical addresses** (`docs/PROOFMARK_DEPLOYMENT.md`): StudioNet
 `0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4` (e2e **28/28 PASS**) and Bradbury
 `0x79C15889D5070321176994373C440778a9eC47c1` (read-verified). The live board was
-re-seeded to the §05 numbers. Suite: `python -m pytest tests/direct/test_aegis.py
+re-seeded to the §05 numbers. Suite: `python -m pytest tests/direct/test_proofmark.py
 -q` → **28 passed**; `genvm-lint` clean.
 
 ### Confirmed present (each has a regression test or a code-level trace)
@@ -435,7 +446,7 @@ auto-breach claim, collect ≈ coverage − premium. The **one-wallet** version 
 on your own agent) is now **impossible** (item 9, self-buy revert), the deadline
 can't be a ~1-second loop anymore (item 7, 60 s floor), and per-policy coverage
 is capped to what a single claim pays (item 10). Remaining residual, disclosed
-in the contract and `docs/CONTRACT.md`: a controller using **two separate
+in the contract and `docs/PROOFMARK_CONTRACT.md`: a controller using **two separate
 wallets** can still run a slow drip (~coverage − premium per round, bounded to
 10% of the pool per round). Insurance that pays out more than its premium is the
 mechanism's point — an honest claim is economically identical — so no contract
@@ -457,23 +468,24 @@ must be smoked **after** the demo take, because a judged payout draws from a
 pool and would shift the §05 board numbers mid-filming.
 
 ## Documentation (created 2026-09-02)
-- `docs/DEPLOYMENT.md` — per-network addresses, redeploy + verify steps, network quirks.
-- `docs/CONTRACT.md` — contract overview, public interface, parameters, security hardening.
-- `docs/dev/` — internal working notes (PROGRESS.md, PROJECT_MEMORY.md).
+- `docs/PROOFMARK_DEPLOYMENT.md` — per-network addresses, redeploy + verify steps, network quirks.
+- `docs/PROOFMARK_CONTRACT.md` — contract overview, public interface, parameters, security hardening.
+- `docs/dev/` — internal working notes (PROOFMARK_PROGRESS.md,
+  PROOFMARK_PROJECT_MEMORY.md).
 
 ## Next steps
-0. **Flip the Vercel env** to `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS =
+0. **Flip the Vercel env** to `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS =
    0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4` and redeploy the project (the
    only outstanding action; no local CLI token). Then verify the live site reads
    the new contract (page foot + board numbers Unrated 10.06 / locked 1.00 /
    Bronze 5 / Silver 3 / Gold 2 + seeded feed).
 1. Dry-run the rewritten §05 path live against the final UI on a fresh profile
    (pools are seeded; feed opens with the seeded history), then record the demo
-   from `aegis-demo-plan.md` / `aegis-demo-captions.md`: ~2-min-deadline claim
+   from the demo plan / captions: ~2-min-deadline claim
    leaves the planted example on-chain. Then fill the remaining `[YOU: …]`
-   blanks in `aegis-submission-note.md` (logo, dropdown tags, YouTube link, the
+   blanks in the submission note (logo, dropdown tags, YouTube link, the
    planted job id for §05 Step 2 — deploy tx hashes are now recorded in
-   `docs/DEPLOYMENT.md`) and submit.
+   `docs/PROOFMARK_DEPLOYMENT.md`) and submit.
 2. Keep StudioNet as the live frontend target (Bradbury stays documented only).
 3. Optional, AFTER the demo take: live-judged-path smoke on StudioNet (register
    a fresh agent, submit a real deliverable CID, file a claim through consensus)

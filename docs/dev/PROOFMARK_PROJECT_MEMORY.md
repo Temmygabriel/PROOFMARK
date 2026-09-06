@@ -1,22 +1,23 @@
-# Aegis — Project Memory
+# Proofmark — Project Memory
 
 Local working notes. This file holds facts that are easy to lose between
 sessions: deployed addresses, network quirks, tooling gotchas, and the
 reasoning behind decisions. Update it whenever something notable changes.
 
-## 🔄 REBRAND IN PROGRESS — Aegis → Proofmark (2026-09-06)
+## Rebrand banner — Proofmark (2026-09-06)
 
-Product is being renamed **Aegis → Proofmark** across everything
-(`proofmark-rebrand-spec.md`, AEGIS root). Contract lives at
+Product rebranded to **Proofmark** across everything
+(`proofmark-rebrand-spec.md`, project root). Contract lives at
 `intelligent-contracts/proofmark.py` (`class Proofmark`); tests renamed
 `tests/direct/test_proofmark*.py`; e2e package → `proofmark-e2e`; **frontend fully
-rebranded (Phase 3 done, uncommitted):** Geist fonts, graphite + proof-blue design
+rebranded (Phase 3 done):** Geist fonts, graphite + proof-blue design
 system (spec §2, copper/shield/navy/ALL-CAPS removed), `ProofmarkLogo`
 hexagon-check, ConformanceStamp NOT DELIVERED/DELIVERED, proof-pill, feed keys
 `proofmark.activity.v1`/`proofmark:feed`, identity key
 `proofmark.identity.pk.v1` + legacy migration, `proofmarkClient.ts` +
-`VERDICT_BOND_ATTO` + `penalty` tier. Remaining: doc renames to `PROOFMARK_*`
-(Phase 4), AEGIS-root/review-doc sweep (Phase 5). **No ABI change** — the rename
+`VERDICT_BOND_ATTO` + `penalty` tier. In-repo docs renamed to `PROOFMARK_*` and
+swept to grep-zero (Phase 4 done). Next: project-root/review-doc sweep
+(Phase 5). **No ABI change** — the rename
 makes a new deploy artifact, so **Phase 6 redeploys StudioNet + Bradbury to fresh
 addresses** and re-runs the live proof on the Proofmark contract. The StudioNet
 e2e **37/37** run on `0x589472da571Db60151100b153D65a7170367E17D` (2026-09-06) is
@@ -26,11 +27,11 @@ by the user (origin URL untouched; GitHub redirects). All old addresses below
 
 ## What the project is
 
-Aegis = non-performance insurance for the AI-agent marketplace, on GenLayer.
+Proofmark = non-performance coverage for the AI-agent marketplace, on GenLayer.
 
-- `intelligent-contracts/aegis.py` — single GenLayer intelligent contract.
+- `intelligent-contracts/proofmark.py` — single GenLayer intelligent contract.
 - `frontend/` — Next.js dashboard (deploy to Vercel).
-- `docs/UX_FLOW.md` — the three user flows (agent / buyer / LP).
+- `docs/PROOFMARK_UX_FLOW.md` — the three user flows (agent / buyer / LP).
 
 Four moving parts in the contract:
 1. **Agent identity & reputation** — one wallet binds to one `agent_id` at
@@ -84,10 +85,10 @@ Four moving parts in the contract:
   `0xED90a97A77cd959bB278cBDfA0f2981dF5b5B843`, Bradbury
   `0xcBF48A444242919EEA65Ff5bB6BD9d2CB82506e2`; older still StudioNet `0x4870…`,
   Bradbury `0x1ad8…` (first) and `0xcE82…` (holds orphaned 20.06 GEN from a
-  LEADER_TIMEOUT deposit burn; no recovery path — see PROGRESS.md).
+  LEADER_TIMEOUT deposit burn; no recovery path — see PROOFMARK_PROGRESS.md).
 
-The frontend needs the address via `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS` (and
-`NEXT_PUBLIC_AEGIS_NETWORK` for which network) — see `frontend/.env.example`.
+The frontend needs the address via `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS` (and
+`NEXT_PUBLIC_PROOFMARK_NETWORK` for which network) — see `frontend/.env.example`.
 
 ## Tooling gotchas (this machine)
 
@@ -127,8 +128,8 @@ The frontend needs the address via `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS` (and
 ## GenLayer signing model (frontend, learned the hard way)
 
 - MetaMask **cannot sign** GenLayer tx. The app signs with a genlayer-js
-  keypair created/stored in the browser (localStorage `aegis.identity.pk.v1`)
-  and labels it honestly as a "browser identity." Modeled on the Rigor
+  keypair created/stored in the browser (localStorage; key + legacy migration
+  live in `lib/identity.ts`) and labels it honestly as a "browser identity." Modeled on the Rigor
   frontend (`identity.ts` / `IdentityBadge.tsx` / `providers.tsx` on disk).
 - **viem private-key trap:** `createAccount(pk)` returns an Account object
   whose `.privateKey` is `undefined`. Persist YOUR OWN copy of the key
@@ -141,7 +142,7 @@ The frontend needs the address via `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS` (and
   on the local-account path (verified in genlayer-js 1.2.0 `dist/index.js`,
   `_sendTransaction`). The older Rigor note "never send an explicit value:0 —
   GenLayer's RPC rejects it" applies to the MetaMask/`eth_sendTransaction`
-  provider path, NOT to local-account signing. Aegis uses local accounts, so it
+  provider path, NOT to local-account signing. This app uses local accounts, so it
   passes `value` unconditionally (0n when nothing moves).
 - Identity hydration must run in a client-only `useEffect` (never during SSR),
   or the page server-renders a fresh random key every request.
@@ -149,7 +150,7 @@ The frontend needs the address via `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS` (and
 ## Frontend design (user is opinionated about the UI — Proofmark tokens govern)
 
 - **Superseded (pre-rebrand):** the "bold modern" dark-navy `#0a0e19` console with
-  a copper `#d98e45` glow was Aegis's look. The Proofmark rebrand (spec §2)
+  a copper `#d98e45` glow was the pre-rebrand look. The Proofmark rebrand (spec §2)
   **retired it** — true graphite-black `#09090b/#0e0e11/#141417`, proof blue
   `#3b8eff` (primary), settled green `#22c97a` (delivered), breach amber
   `#e8a020` (NOT DELIVERED), muted-red `#c96161` (penalty tier), infra-grid body,
@@ -160,4 +161,4 @@ The frontend needs the address via `NEXT_PUBLIC_AEGIS_CONTRACT_ADDRESS` (and
 
 ## Related
 
-- `docs/dev/PROGRESS.md` — running log of work, status, and next steps.
+- `docs/dev/PROOFMARK_PROGRESS.md` — running log of work, status, and next steps.

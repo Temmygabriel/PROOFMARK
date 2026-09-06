@@ -1,4 +1,4 @@
-# Aegis — UX Flow
+# Proofmark — UX Flow
 
 Three people use this product, each with one job to do. The frontend is
 built as one dashboard rather than three separate apps because a real

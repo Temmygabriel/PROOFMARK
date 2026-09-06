@@ -1,4 +1,4 @@
-# Aegis — Real-Network E2E Test Report
+# Proofmark — Real-Network E2E Test Report
 
 Harness: `e2e/run.js` + `e2e/roundtrip.js` (genlayer-js — the same SDK the
 frontend uses, chosen because the `genlayer` CLI cannot attach `value` to
@@ -22,7 +22,7 @@ gaming-hardened source on the current canonical deploy (its `e2e/results/
 studionet-e2e.log` also exercises the new sub-60 s deadline revert). The two
 2026-09-02 rows are the prior-generation runs; details in the sections below
 were captured then. All four contracts deployed from the same source file:
-`intelligent-contracts/aegis.py`.
+`intelligent-contracts/proofmark.py`.
 
 ---
 

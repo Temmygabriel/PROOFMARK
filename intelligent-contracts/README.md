@@ -13,9 +13,9 @@ drifting apart.
 | **StudioNet** (61999) | *(pending Phase 6 redeploy — see below)* | — |
 | **Testnet Bradbury** (4221) | *(pending Phase 6 redeploy — see below)* | — |
 
-> **Rebrand note (2026-09-06):** the contract was renamed `aegis.py` →
-> `proofmark.py` and `class Aegis` → `class Proofmark` as part of the Proofmark
-> rebrand. That is a **new deploy artifact**, so both networks get fresh addresses
+> **Rebrand note (2026-09-06):** the contract source was renamed to `proofmark.py`
+> and the contract class renamed `Proofmark` as part of the product rebrand. That is a
+> **new deploy artifact**, so both networks get fresh addresses
 > and the live proof is re-run on the new contract. The prior Shape B deploy
 > (`0x589472da571Db60151100b153D65a7170367E17D`, StudioNet e2e **37/37** PASS on
 > 2026-09-06) stands as the **historical pre-rename validation**.
