@@ -1,6 +1,12 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 """
-Aegis -- Non-Performance Insurance for the Agentic Marketplace Economy
+Proofmark -- Trust Infrastructure for AI Agent Transactions
+
+On-chain surety bonds for the agentic economy. A buyer backs a job
+commitment from a registered AI agent; if the agent fails to deliver
+to spec, GenLayer validator consensus confirms the breach and the
+buyer is paid automatically from the underwriting pool.
+
 Single-contract v1, built for studio.genlayer.com (StudioNet).
 
 Everything lives in one gl.Contract: agent identity/reputation, policy
@@ -449,7 +455,7 @@ class Policy:
     agent_accepted: bool   # False until the insured agent calls accept_job (FIX-02)
 
 
-class Aegis(gl.Contract):
+class Proofmark(gl.Contract):
     agents: TreeMap[str, AgentProfile]
     address_to_agent: TreeMap[str, str]
 

@@ -1,4 +1,4 @@
-"""Direct-mode (in-memory, leader-only) tests for intelligent-contracts/aegis.py.
+"""Direct-mode (in-memory, leader-only) tests for intelligent-contracts/proofmark.py.
 
 Covers every public method plus the gaming/security vectors the contract
 documents it defends against. Claim judgement is mocked: web fetches (spec /
@@ -11,7 +11,7 @@ Fixture roles used throughout:
   direct_charlie-- the main buyer
   direct_owner  -- a second buyer / extra account
 
-Run:  python -m pytest tests/direct/test_aegis.py -v
+Run:  python -m pytest tests/direct/test_proofmark.py -v
 """
 
 import json
@@ -123,7 +123,7 @@ def setUpPoolAndAgent(direct_vm, contract, lp, agent_acct, buyer_acct):
 # ---------------------------------------------------------------------------
 
 def test_register_and_get_profile(direct_vm, direct_deploy, direct_bob):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     direct_vm.warp(T0)
     register(direct_vm, contract, direct_bob, "Agent-Bob")
 
@@ -140,7 +140,7 @@ def test_register_and_get_profile(direct_vm, direct_deploy, direct_bob):
 def test_register_rejects_duplicate_and_bound_address(
     direct_vm, direct_deploy, direct_bob, direct_charlie
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     register(direct_vm, contract, direct_bob, "agent-a")
 
     with direct_vm.expect_revert("already registered"):
@@ -154,14 +154,14 @@ def test_register_case_variant_is_same_identity(
     direct_vm, direct_deploy, direct_bob
 ):
     """Case-variant squatting must be closed: 'Agent-A' == 'agent-a'."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     register(direct_vm, contract, direct_bob, "Agent-A")
     with direct_vm.expect_revert("already registered"):
         register(direct_vm, contract, direct_bob, "agent-a")
 
 
 def test_register_empty_id_rejected(direct_vm, direct_deploy, direct_bob):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     with direct_vm.expect_revert("cannot be empty"):
         register(direct_vm, contract, direct_bob, "   ")
 
@@ -173,7 +173,7 @@ def test_register_empty_id_rejected(direct_vm, direct_deploy, direct_bob):
 def test_deposit_bootstrap_and_proportional_shares(
     direct_vm, direct_deploy, direct_alice, direct_charlie
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     fund_accounts(direct_vm, direct_alice, direct_charlie)
 
     deposit(direct_vm, contract, direct_alice, "unrated", 5 * 10**18)
@@ -192,7 +192,7 @@ def test_deposit_bootstrap_and_proportional_shares(
 def test_deposit_invalid_tier_and_zero_value(
     direct_vm, direct_deploy, direct_alice
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     with direct_vm.expect_revert("unknown tier"):
         deposit(direct_vm, contract, direct_alice, "platinum", 5 * 10**18)
 
@@ -206,7 +206,7 @@ def test_withdraw_blocks_under_locked_exposure(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
     """LP cannot pull capital out from under live coverage."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18  # 1 GEN
@@ -235,7 +235,7 @@ def test_withdraw_release_after_policy_expires(
 ):
     """Once the buyer expires the policy (deadline passed), exposure is
     released and the LP can fully withdraw."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -262,7 +262,7 @@ def test_withdraw_release_after_policy_expires(
 def test_expire_policy_requires_buyer_and_passed_deadline(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie, direct_owner
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -293,7 +293,7 @@ def test_issue_policy_requires_pool_capital(
     direct_vm, direct_deploy, direct_bob, direct_charlie
 ):
     """Empty-pool first-depositor exploit must be closed: no capital, no policy."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     direct_vm.warp(T0)  # so DEADLINE reads as future; the pool check is the target
     fund_accounts(direct_vm, direct_bob, direct_charlie)
     register(direct_vm, contract, direct_bob, "agent-a")
@@ -307,7 +307,7 @@ def test_issue_policy_requires_pool_capital(
 def test_issue_policy_rejects_url_and_min_coverage(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     # spec_hash must be a CID, not a mutable URL.
@@ -328,7 +328,7 @@ def test_issue_policy_premium_min_and_overpay_refunded(
     issue could flip the agent's tier between quote and payment and revert the
     buyer for one atto). issue_policy now accepts value >= premium, crediting
     exactly the premium and refunding the excess."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -354,7 +354,7 @@ def test_issue_policy_rejects_past_and_too_soon_deadlines(
     a buyer can't instantly trigger the no-deliverable auto-breach. The same
     guard now also floors the horizon (MIN_DEADLINE_HORIZON_SECONDS = 60 s) so
     a manufactured round can't run on a ~1-second deadline."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     with direct_vm.expect_revert("seconds in the future"):
@@ -382,7 +382,7 @@ def test_issue_policy_rejects_self_buy(
     """Self-dealing hardening: the agent's own owner wallet cannot buy cover
     on it (closes the one-wallet drain -- register an agent, self-buy, collect
     a payout on a default you control). The buyer must be a separate role."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_bob)
 
     with direct_vm.expect_revert("cannot insure the agent's own job"):
@@ -396,7 +396,7 @@ def test_issue_policy_coverage_capped_to_single_claim_share(
     """MAX_COVERAGE_BPS_OF_POOL: one policy's coverage is capped to what one
     claim can ever pay (10% of the tier pool), so no buyer holds a policy
     labeled more than a single claim could collect."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     # 20% of the 20 GEN pool is above the 10% cap -> rejected.
@@ -416,7 +416,7 @@ def test_issue_policy_locks_exposure_and_counts_buyer_once(
 ):
     """Same buyer across multiple jobs counts as ONE distinct buyer, and
     exposure locks pool capital behind live coverage."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -435,7 +435,7 @@ def test_issue_policy_locks_exposure_and_counts_buyer_once(
 def test_policy_idempotency_and_unknown_agent(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     with direct_vm.expect_revert("unknown agent_id"):
@@ -458,7 +458,7 @@ def test_policy_idempotency_and_unknown_agent(
 def test_submit_deliverable_access_and_shape(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -488,7 +488,7 @@ def test_submit_deliverable_access_and_shape(
 
 
 def test_submit_deliverable_unknown_job(direct_vm, direct_deploy, direct_bob):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     register(direct_vm, contract, direct_bob, "agent-a")
     direct_vm.sender = direct_bob
     with direct_vm.expect_revert("unknown job_id"):
@@ -502,7 +502,7 @@ def test_submit_deliverable_unknown_job(direct_vm, direct_deploy, direct_bob):
 def test_claim_premature_without_deliverable(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -523,7 +523,7 @@ def test_claim_auto_breach_when_no_deliverable_after_deadline(
 ):
     """Agent never submitted anything + deadline passed = deterministic breach,
     full payout up to the pool cap, bond refunded, exposure released."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -550,7 +550,7 @@ def test_claim_judged_upheld(direct_vm, direct_deploy, direct_alice, direct_bob,
                              direct_charlie):
     """Judged path: agent submitted a deliverable that DOES NOT meet spec ->
     LLM score below threshold -> breach upheld, payout + bond refund."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -583,7 +583,7 @@ def test_claim_judged_rejected_bond_forfeited(
 ):
     """Deliverable conforms -> score high -> rejected; buyer's bond goes to
     the pool (compensates LPs for consensus), exposure released."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -613,7 +613,7 @@ def test_claim_judged_rejected_bond_forfeited(
 def test_claim_gate_access_and_bond(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie, direct_owner
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -653,7 +653,7 @@ def test_claim_payout_capped_at_10pct_pool(
     the pool below the coverage amount: two 2 GEN policies on a 20 GEN pool --
     the first pays its full 2 GEN, the second finds the pool at 18.24 GEN and
     can only pay 1.824 GEN."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     cov = 2 * 10**18  # exactly 10% of the 20 GEN pool -- allowed at issue
@@ -694,7 +694,7 @@ def test_tier_promotion_bronze_requires_real_buyers_and_tenure(
     """Bronze: >=3 insured jobs, >=2 distinct buyers, >=3 days tenure.
     FIX-08: promotion only sticks when the earned tier is actually funded, so
     the test backs 'bronze' with real LP capital too."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
     direct_vm.warp(T0)
     deposit(direct_vm, contract, direct_alice, "unrated", 50 * 10**18)
@@ -734,7 +734,7 @@ def test_tier_pricing_changes_after_promotion(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie, direct_owner
 ):
     """After promotion the premium is priced off the new tier's rate."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
     direct_vm.warp(T0)
     deposit(direct_vm, contract, direct_alice, "unrated", 50 * 10**18)
@@ -776,7 +776,7 @@ def test_tier_pricing_changes_after_promotion(
 def test_claim_history_updates_profile(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -804,7 +804,7 @@ def test_unresolvable_cid_submit_reverts(direct_vm, direct_deploy, direct_alice,
     """C-1 veto: a deliverable CID that does not resolve must fail on the
     AGENT's submit transaction (live probe, FIX-01) -- never brick the buyer's
     later claim with an unjudgeable CID."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -830,7 +830,7 @@ def test_post_probe_unpin_is_breach_not_revert(direct_vm, direct_deploy,
     """C-1 veto: a CID that was retrievable at submit but 404s at claim time
     is adjudicated as a BREACH (score 0), not an unjudgeable revert -- so an
     agent cannot unpin after the fact to neutralise a pending claim."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -864,7 +864,7 @@ def test_deliverable_frozen_after_deadline(direct_vm, direct_deploy,
                                            direct_charlie):
     """C-1: evidence is frozen at the deadline -- the agent cannot swap in an
     unretrievable CID once a claim looks likely (FIX-01 Step 3)."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -885,7 +885,7 @@ def test_whitespace_cid_is_canonicalized(direct_vm, direct_deploy,
     """C-1 variant 2: the fix CANONICALIZES rather than rejecting, so a CID
     padded with whitespace/newlines is stored stripped -- validating .strip()
     while storing the raw argument would have corrupted the gateway URL."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -904,7 +904,7 @@ def test_oversized_cid_rejected(direct_vm, direct_deploy, direct_alice,
                                 direct_bob, direct_charlie):
     """C-1 variant 3: an unbounded CIDv1 that would 414 the gateway is rejected
     by the MAX_CID_LEN cap before any fetch."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -924,7 +924,7 @@ def test_unaccepted_policy_cannot_submit_or_claim(direct_vm, direct_deploy,
     """C-2 consent: a PENDING policy (issued but not yet accepted by the agent)
     carries no submit or claim rights -- a stranger cannot bind an agent and
     then let the deadline auto-breach."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -953,7 +953,7 @@ def test_reject_job_releases_and_refunds(direct_vm, direct_deploy, direct_alice,
                                          direct_bob, direct_charlie):
     """C-2: an agent rejecting a pending policy releases its locked exposure
     and refunds the buyer's premium (no grief-lock, no value lost)."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -977,7 +977,7 @@ def test_cancel_pending_policy_releases_and_refunds(direct_vm, direct_deploy,
                                                     direct_charlie, direct_owner):
     """C-2: the buyer can cancel a pending policy the agent never accepted;
     exposure is released and the premium refunded. Only the buyer may cancel."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -1001,7 +1001,7 @@ def test_aggregate_exposure_capped(direct_vm, direct_deploy, direct_alice,
                                    direct_bob, direct_charlie):
     """FIX-03: aggregate live coverage per tier is capped at 50% of the pool,
     so enough 10%-sized policies can no longer freeze LP capital forever."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     cov = 2 * 10**18  # exactly the 10%-of-20-GEN single-policy cap
@@ -1022,7 +1022,7 @@ def test_bronze_requires_breach_rate(direct_vm, direct_deploy, direct_alice,
     """FIX-07: bronze is gated on an actual breach-rate record, not monotonic
     counts. An agent meeting the job/buyer/tenure thresholds but carrying a
     1-in-3 breach rate stays unrated -- it must NOT be promoted to bronze."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
     direct_vm.warp(T0)
     deposit(direct_vm, contract, direct_alice, "unrated", 100 * 10**18)
@@ -1073,7 +1073,7 @@ def test_penalty_tier_after_high_breach(direct_vm, direct_deploy, direct_alice,
     """FIX-07: a chronic breacher (breach rate above PENALTY_BREACH_RATE) is
     demoted to the penalty tier, priced WORSE than any newcomer (1200 bps).
     The penalty pool must be funded for the tier to stick (FIX-08 fallback)."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
     direct_vm.warp(T0)
     deposit(direct_vm, contract, direct_alice, "unrated", 50 * 10**18)
@@ -1108,7 +1108,7 @@ def test_promotion_into_unfunded_falls_back(direct_vm, direct_deploy,
     """FIX-08: promotion into an unfunded tier falls back to the best funded
     tier at or below -- an honest agent can never be stranded in a tier with no
     underwriting capital (which would make them uninsurable)."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
     direct_vm.warp(T0)
     deposit(direct_vm, contract, direct_alice, "unrated", 50 * 10**18)  # no bronze pool
@@ -1135,7 +1135,7 @@ def test_permissionless_expiry_after_window(direct_vm, direct_deploy,
                                             direct_charlie, direct_owner):
     """FIX-09: after the 7-day claim window closes, ANYONE can expire an
     abandoned active policy and release its locked exposure."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -1156,7 +1156,7 @@ def test_file_claim_refused_after_window(direct_vm, direct_deploy, direct_alice,
                                          direct_bob, direct_charlie):
     """FIX-09: once the 7-day claim window has closed no claim may be filed --
     this is what makes the permissionless expiry race-free."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -1177,7 +1177,7 @@ def test_out_of_range_score_rejected(direct_vm, direct_deploy, direct_alice,
     """FIX-06: an out-of-range LLM score reverts the claim instead of being
     silently clamped -- clamping would destroy the divergence signal the
     validator comparison depends on."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
@@ -1203,7 +1203,7 @@ def test_zero_share_deposit_rejected(direct_vm, direct_deploy, direct_alice,
                                      direct_bob, direct_charlie):
     """FIX-11: a deposit too small to mint any LP shares reverts instead of
     silently burning the depositor's value."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     # Inflate pool balance above total shares by issuing (premium is credited
@@ -1223,7 +1223,7 @@ def test_invalid_calendar_date_rejected(direct_vm, direct_deploy, direct_alice,
                                         direct_bob, direct_charlie):
     """FIX-15c: an impossible calendar date (2026-02-30) must not silently roll
     over in epoch math -- it is rejected at issuance."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     with direct_vm.expect_revert("must be an ISO-8601"):
@@ -1237,7 +1237,7 @@ def test_rate_limit_maps_to_transient(direct_vm, direct_deploy, direct_alice,
     """FIX-13: a per-validator 429 on the evidence gateway routes to a
     transient error (revert + consensus rotation) -- never to a permanent
     verdict, and never with status codes embedded in the [EXTERNAL] message."""
-    contract = direct_deploy("intelligent-contracts/aegis.py")
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
