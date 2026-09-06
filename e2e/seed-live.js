@@ -91,7 +91,11 @@ async function main() {
     `issue ${jobId} (payable ${genFmt(quote?.premium_atto)} premium)`
   );
 
-  // 5) Final board state: Unrated now carries the locked-exposure sliver.
+  // 4b) Shape B consent: the live agent accepts the job -> PENDING -> ACTIVE.
+  await write(liveWallet, "accept_job", [jobId], 0n, `live agent accepts ${jobId}`);
+
+  // 5) Final board state: Unrated now carries the locked-exposure sliver
+  //    (deposit 10 + premium 0.06; the premium stays in the pool at issue).
   const pol = await m.read("get_policy", [jobId]);
   const unrated = await m.read("get_pool_info", ["unrated"]);
   console.log("\n--- final board state ---");
@@ -100,7 +104,7 @@ async function main() {
     `unrated balance=${genFmt(unrated?.balance_atto)} locked=${genFmt(unrated?.locked_exposure_atto)}`
   );
   console.log("\nLive board should now read:");
-  console.log(`  Unrated  10.0000 GEN   (locked sliver 1.0000 GEN)`);
+  console.log(`  Unrated  10.0600 GEN   (locked sliver 1.0000 GEN)`);
   console.log(`  Bronze    5.0000 GEN`);
   console.log(`  Silver    3.0000 GEN`);
   console.log(`  Gold      2.0000 GEN`);

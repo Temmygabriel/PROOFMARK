@@ -27,15 +27,24 @@ MIN_COVERAGE = 10**16
 SPEC = "Qm" + "a" * 44
 DELIV_OK = "Qm" + "b" * 44
 DELIV_BAD = "Qm" + "c" * 44
-# A mutable URL -- must be rejected by _looks_like_content_hash.
+# A mutable URL -- must be rejected by _canonical_content_hash (FIX-01).
 MUTABLE_URL = "https://gist.github.com/someone/edit"
+# A CID wrapped in whitespace/newlines -- canonicalization must strip (FIX-01 v2).
+WHITESPACE_CID = "   " + DELIV_OK + "\n"
+# A syntactically-valid CIDv1 that exceeds MAX_CID_LEN (FIX-01 v3).
+LONG_CID = "b" + "y" * 80
 
 T0 = "2026-01-01T00:00:00Z"
 T_PLUS_4 = "2026-01-05T00:00:00Z"
 DEADLINE = "2026-03-01T00:00:00Z"
 PAST_DEADLINE = "2025-12-01T00:00:00Z"
 
-RATE_BPS = {"unrated": 600, "bronze": 400, "silver": 250, "gold": 150}
+# 2026-03-02 = 1 day after DEADLINE (within the 7-day claim window).
+AFTER_DEADLINE = "2026-03-02T00:00:00Z"
+# 2026-03-10 = 9 days after DEADLINE (past the 7-day claim window, FIX-09).
+PAST_WINDOW = "2026-03-10T00:00:00Z"
+
+RATE_BPS = {"unrated": 600, "bronze": 400, "silver": 250, "gold": 150, "penalty": 1200}
 
 
 def premium_for(coverage_atto: int, tier: str) -> int:
@@ -64,6 +73,36 @@ def issue_policy(direct_vm, contract, buyer, job_id, agent_id, coverage_atto,
     direct_vm.sender = buyer
     direct_vm.value = premium_atto
     contract.issue_policy(job_id, agent_id, coverage_atto, spec, deadline)
+
+
+def accept(direct_vm, contract, agent_acct, job_id):
+    """FIX-02: the insured agent must accept a pending policy before any
+    submit / claim / expire can happen."""
+    direct_vm.sender = agent_acct
+    contract.accept_job(job_id)
+
+
+def issue_active(direct_vm, contract, buyer, agent_acct, job_id, agent_id,
+                 coverage_atto, spec, deadline, premium_atto):
+    """Issue a policy AND have the agent accept it, so the test can act on an
+    active policy (submit / claim / expire) in one line."""
+    issue_policy(direct_vm, contract, buyer, job_id, agent_id, coverage_atto,
+                 spec, deadline, premium_atto)
+    accept(direct_vm, contract, agent_acct, job_id)
+
+
+def mock_cid(direct_vm, cid, body="untrusted spec/deliverable bytes"):
+    """Register a 200 mock for one evidence CID (probe at submit + judge fetch
+    at claim both hit the gateway)."""
+    direct_vm.mock_web(r".*" + cid + r".*", {"status": 200, "body": body})
+
+
+def mock_judgement(direct_vm, score, injection=False):
+    """Mock the LLM conformance grader with the new Shape B output schema."""
+    direct_vm.mock_llm(
+        r".*material conformance.*",
+        json.dumps({"score": score, "injection": injection, "reasoning": "mock"}),
+    )
 
 
 def fund_accounts(direct_vm, *accounts, amount=1000 * 10**18):
@@ -203,6 +242,7 @@ def test_withdraw_release_after_policy_expires(
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
     direct_vm.warp("2026-03-02T00:00:00Z")  # after deadline
     direct_vm.sender = direct_charlie
@@ -229,16 +269,19 @@ def test_expire_policy_requires_buyer_and_passed_deadline(
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
     # Before the deadline -> not allowed.
     direct_vm.sender = direct_charlie
     with direct_vm.expect_revert("deadline has not passed"):
         contract.expire_policy("job-1")
 
-    # After the deadline but from a non-buyer -> not allowed.
+    # After the deadline but from a non-buyer, before the claim window closes
+    # -> still not allowed (FIX-09: only the buyer may expire while a claim
+    # could still race in; anyone may once the 7-day window closes).
     direct_vm.warp("2026-03-02T00:00:00Z")
     direct_vm.sender = direct_owner
-    with direct_vm.expect_revert("only the buyer"):
+    with direct_vm.expect_revert("claim window still open"):
         contract.expire_policy("job-1")
 
 
@@ -278,17 +321,30 @@ def test_issue_policy_rejects_url_and_min_coverage(
                      MIN_COVERAGE - 1, SPEC, DEADLINE, 1)
 
 
-def test_issue_policy_requires_exact_premium(
+def test_issue_policy_premium_min_and_overpay_refunded(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
+    """FIX-14: exact-premium enforcement was a front-runnable race (a concurrent
+    issue could flip the agent's tier between quote and payment and revert the
+    buyer for one atto). issue_policy now accepts value >= premium, crediting
+    exactly the premium and refunding the excess."""
     contract = direct_deploy("intelligent-contracts/aegis.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
     coverage = 10**18
     exact = premium_for(coverage, "unrated")
-    with direct_vm.expect_revert("premium must be exactly"):
+
+    # Underpaying still reverts.
+    with direct_vm.expect_revert("premium must be at least"):
         issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
-                     coverage, SPEC, DEADLINE, exact + 1)
+                     coverage, SPEC, DEADLINE, exact - 1)
+
+    # Overpaying is accepted; only the premium is credited to the pool.
+    issue_policy(direct_vm, contract, direct_charlie, "job-2", "agent-a",
+                 coverage, SPEC, DEADLINE, exact + 10**18)
+    assert contract.get_policy("job-2")["status"] == "pending"
+    # Pool gained exactly `exact`, not the overpaid amount (excess refunded).
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + exact
 
 
 def test_issue_policy_rejects_past_and_too_soon_deadlines(
@@ -313,7 +369,11 @@ def test_issue_policy_rejects_past_and_too_soon_deadlines(
     # 90 s out clears the floor (this is the boundary the demo relies on).
     issue_policy(direct_vm, contract, direct_charlie, "job-3", "agent-a",
                  10**18, SPEC, "2026-01-01T00:01:30Z", premium_for(10**18, "unrated"))
+    # FIX-02: freshly issued policy is PENDING until the agent accepts.
+    assert contract.get_policy("job-3")["status"] == "pending"
+    accept(direct_vm, contract, direct_bob, "job-3")
     assert contract.get_policy("job-3")["status"] == "active"
+    assert contract.get_policy("job-3")["agent_accepted"] is True
 
 
 def test_issue_policy_rejects_self_buy(
@@ -347,6 +407,7 @@ def test_issue_policy_coverage_capped_to_single_claim_share(
     # Exactly 10% (2 GEN) is allowed.
     issue_policy(direct_vm, contract, direct_charlie, "job-2", "agent-a",
                  2 * 10**18, SPEC, DEADLINE, premium_for(2 * 10**18, "unrated"))
+    accept(direct_vm, contract, direct_bob, "job-2")
     assert contract.get_policy("job-2")["status"] == "active"
 
 
@@ -404,18 +465,22 @@ def test_submit_deliverable_access_and_shape(
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
     # Only the insured agent may submit.
     direct_vm.sender = direct_charlie
     with direct_vm.expect_revert("only the insured agent"):
         contract.submit_deliverable("job-1", DELIV_OK)
 
-    # Must be a CID, not a URL.
+    # Must be a CID, not a URL (rejected before any probe).
     direct_vm.sender = direct_bob
     with direct_vm.expect_revert("must be a content-addressed"):
         contract.submit_deliverable("job-1", MUTABLE_URL)
 
-    # Agent submits, and can overwrite before the claim is judged.
+    # Agent submits, and can overwrite before the claim is judged. Each submit
+    # live-probes the CID (FIX-01), so both CIDs must resolve before submit.
+    mock_cid(direct_vm, DELIV_BAD, "a genuinely bad deliverable")
+    mock_cid(direct_vm, DELIV_OK, "the real deliverable")
     direct_vm.sender = direct_bob
     contract.submit_deliverable("job-1", DELIV_BAD)
     contract.submit_deliverable("job-1", DELIV_OK)
@@ -444,6 +509,7 @@ def test_claim_premature_without_deliverable(
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
     # Before the deadline and no deliverable -> premature.
     direct_vm.sender = direct_charlie
@@ -464,6 +530,7 @@ def test_claim_auto_breach_when_no_deliverable_after_deadline(
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
     direct_vm.warp("2026-03-02T00:00:00Z")  # after deadline, no deliverable
     direct_vm.sender = direct_charlie
@@ -490,14 +557,16 @@ def test_claim_judged_upheld(direct_vm, direct_deploy, direct_alice, direct_bob,
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
+    # submit_deliverable live-probes the CID (FIX-01): mock it before submit.
+    mock_cid(direct_vm, DELIV_BAD, "It's a static cat picture.")
     direct_vm.sender = direct_bob
     contract.submit_deliverable("job-1", DELIV_BAD)
 
-    # Mock the two IPFS fetches + the LLM judgement.
-    direct_vm.mock_web(r".*" + SPEC + r".*", {"status": 200, "body": "Build a React dashboard with 5 pages."})
-    direct_vm.mock_web(r".*" + DELIV_BAD + r".*", {"status": 200, "body": "It's a static cat picture."})
-    direct_vm.mock_llm(r".*Score 0-100.*", json.dumps({"score": 5, "reasoning": "totally missed the spec"}))
+    # Mock the spec fetch + the LLM judgement (Shape B output schema).
+    mock_cid(direct_vm, SPEC, "Build a React dashboard with 5 pages.")
+    mock_judgement(direct_vm, 5)  # score below threshold -> breach
 
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
@@ -521,13 +590,14 @@ def test_claim_judged_rejected_bond_forfeited(
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
+    mock_cid(direct_vm, DELIV_OK, "React dashboard with 5 pages delivered.")
     direct_vm.sender = direct_bob
     contract.submit_deliverable("job-1", DELIV_OK)
 
-    direct_vm.mock_web(r".*" + SPEC + r".*", {"status": 200, "body": "Build a React dashboard with 5 pages."})
-    direct_vm.mock_web(r".*" + DELIV_OK + r".*", {"status": 200, "body": "React dashboard with 5 pages delivered."})
-    direct_vm.mock_llm(r".*Score 0-100.*", json.dumps({"score": 95, "reasoning": "matches"}))
+    mock_cid(direct_vm, SPEC, "Build a React dashboard with 5 pages.")
+    mock_judgement(direct_vm, 95)  # score above threshold -> conforms
 
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
@@ -550,6 +620,7 @@ def test_claim_gate_access_and_bond(
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
     direct_vm.warp("2026-03-02T00:00:00Z")  # after deadline
     # Wrong bond.
@@ -591,6 +662,8 @@ def test_claim_payout_capped_at_10pct_pool(
                  cov, SPEC, DEADLINE, prem)
     issue_policy(direct_vm, contract, direct_charlie, "job-2", "agent-a",
                  cov, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+    accept(direct_vm, contract, direct_bob, "job-2")
 
     direct_vm.warp("2026-03-02T00:00:00Z")  # after deadlines, no deliverable
 
@@ -618,11 +691,14 @@ def test_claim_payout_capped_at_10pct_pool(
 def test_tier_promotion_bronze_requires_real_buyers_and_tenure(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie, direct_owner
 ):
-    """Bronze: >=3 insured jobs, >=2 distinct buyers, >=3 days tenure."""
+    """Bronze: >=3 insured jobs, >=2 distinct buyers, >=3 days tenure.
+    FIX-08: promotion only sticks when the earned tier is actually funded, so
+    the test backs 'bronze' with real LP capital too."""
     contract = direct_deploy("intelligent-contracts/aegis.py")
     fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
     direct_vm.warp(T0)
     deposit(direct_vm, contract, direct_alice, "unrated", 50 * 10**18)
+    deposit(direct_vm, contract, direct_alice, "bronze", 50 * 10**18)
     register(direct_vm, contract, direct_bob, "agent-a")
 
     coverage = 10**18
@@ -683,12 +759,14 @@ def test_tier_pricing_changes_after_promotion(
     assert quote["tier"] == "bronze"
     assert quote["rate_bps"] == 400
 
-    # A new policy must now pay the bronze premium exactly.
-    with direct_vm.expect_revert("premium must be exactly"):
+    # A new policy on a bronze agent is priced off the bronze rate. Paying less
+    # (gold's 150 bps) reverts; the bronze premium is accepted (FIX-14).
+    with direct_vm.expect_revert("premium must be at least"):
         issue_policy(direct_vm, contract, direct_charlie, "job-5", "agent-a",
-                     coverage, SPEC, DEADLINE, premium_for(coverage, "unrated"))
+                     coverage, SPEC, DEADLINE, premium_for(coverage, "gold"))
     issue_policy(direct_vm, contract, direct_charlie, "job-5", "agent-a",
                  coverage, SPEC, DEADLINE, premium_for(coverage, "bronze"))
+    assert contract.get_policy("job-5")["status"] == "pending"
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +783,7 @@ def test_claim_history_updates_profile(
     prem = premium_for(coverage, "unrated")
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
 
     direct_vm.warp("2026-03-02T00:00:00Z")  # after deadline, no deliverable
     direct_vm.sender = direct_charlie
@@ -714,3 +793,467 @@ def test_claim_history_updates_profile(
     p = contract.get_profile("agent-a")
     assert p["claims_filed_against"] == 1
     assert p["claims_upheld_against"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Shape B regression tests (SECURITY-CHECK/security-fixes.md)
+# ---------------------------------------------------------------------------
+
+def test_unresolvable_cid_submit_reverts(direct_vm, direct_deploy, direct_alice,
+                                         direct_bob, direct_charlie):
+    """C-1 veto: a deliverable CID that does not resolve must fail on the
+    AGENT's submit transaction (live probe, FIX-01) -- never brick the buyer's
+    later claim with an unjudgeable CID."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    # Deterministic 404 for an unpinned CID.
+    direct_vm.mock_web(r".*" + DELIV_BAD + r".*",
+                       {"status": 404, "body": ""})
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("not retrievable"):
+        contract.submit_deliverable("job-1", DELIV_BAD)
+    # The policy is left untouched -- the buyer can still claim the no-breach
+    # path or a later good submission.
+    assert contract.get_policy("job-1")["deliverable_hash"] == ""
+
+
+def test_post_probe_unpin_is_breach_not_revert(direct_vm, direct_deploy,
+                                               direct_alice, direct_bob,
+                                               direct_charlie):
+    """C-1 veto: a CID that was retrievable at submit but 404s at claim time
+    is adjudicated as a BREACH (score 0), not an unjudgeable revert -- so an
+    agent cannot unpin after the fact to neutralise a pending claim."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    # Submit passes the probe (CID resolves at submit time).
+    mock_cid(direct_vm, DELIV_OK, "deliverable that gets unpinned later")
+    direct_vm.sender = direct_bob
+    contract.submit_deliverable("job-1", DELIV_OK)
+
+    # Between submit and claim the content is unpinned -> now 404 at judge.
+    direct_vm.clear_mocks()
+    mock_cid(direct_vm, SPEC, "spec for a real job")
+    direct_vm.mock_web(r".*" + DELIV_OK + r".*", {"status": 404, "body": ""})
+
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")  # must NOT revert
+
+    assert contract.get_claim_status("job-1") == "upheld"
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
+    # Breach paid out: pool lost the coverage amount.
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + prem - coverage
+
+
+def test_deliverable_frozen_after_deadline(direct_vm, direct_deploy,
+                                           direct_alice, direct_bob,
+                                           direct_charlie):
+    """C-1: evidence is frozen at the deadline -- the agent cannot swap in an
+    unretrievable CID once a claim looks likely (FIX-01 Step 3)."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    direct_vm.warp(AFTER_DEADLINE)  # 1 day past the deadline
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("deadline passed -- deliverable is frozen"):
+        contract.submit_deliverable("job-1", DELIV_OK)
+
+
+def test_whitespace_cid_is_canonicalized(direct_vm, direct_deploy,
+                                         direct_alice, direct_bob,
+                                         direct_charlie):
+    """C-1 variant 2: the fix CANONICALIZES rather than rejecting, so a CID
+    padded with whitespace/newlines is stored stripped -- validating .strip()
+    while storing the raw argument would have corrupted the gateway URL."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    mock_cid(direct_vm, DELIV_OK, "canonical deliverable")
+    direct_vm.sender = direct_bob
+    contract.submit_deliverable("job-1", WHITESPACE_CID)  # "   Qm...\n"
+    assert contract.get_policy("job-1")["deliverable_hash"] == DELIV_OK
+
+
+def test_oversized_cid_rejected(direct_vm, direct_deploy, direct_alice,
+                                direct_bob, direct_charlie):
+    """C-1 variant 3: an unbounded CIDv1 that would 414 the gateway is rejected
+    by the MAX_CID_LEN cap before any fetch."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("CID too long"):
+        contract.submit_deliverable("job-1", LONG_CID)
+
+
+def test_unaccepted_policy_cannot_submit_or_claim(direct_vm, direct_deploy,
+                                                  direct_alice, direct_bob,
+                                                  direct_charlie):
+    """C-2 consent: a PENDING policy (issued but not yet accepted by the agent)
+    carries no submit or claim rights -- a stranger cannot bind an agent and
+    then let the deadline auto-breach."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    assert contract.get_policy("job-1")["status"] == "pending"
+
+    # Agent cannot submit against a policy it has not accepted.
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("policy not active"):
+        contract.submit_deliverable("job-1", DELIV_OK)
+
+    # Buyer cannot claim against an unaccepted policy either.
+    direct_vm.warp(AFTER_DEADLINE)
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    with direct_vm.expect_revert("policy not active"):
+        contract.file_claim("job-1")
+
+    accept(direct_vm, contract, direct_bob, "job-1")
+    assert contract.get_policy("job-1")["status"] == "active"
+
+
+def test_reject_job_releases_and_refunds(direct_vm, direct_deploy, direct_alice,
+                                         direct_bob, direct_charlie):
+    """C-2: an agent rejecting a pending policy releases its locked exposure
+    and refunds the buyer's premium (no grief-lock, no value lost)."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == coverage
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + prem
+
+    direct_vm.sender = direct_bob
+    contract.reject_job("job-1")
+
+    assert contract.get_policy("job-1")["status"] == "expired"
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
+    # Premium refunded -> pool back to its pre-issue balance.
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18
+
+
+def test_cancel_pending_policy_releases_and_refunds(direct_vm, direct_deploy,
+                                                    direct_alice, direct_bob,
+                                                    direct_charlie, direct_owner):
+    """C-2: the buyer can cancel a pending policy the agent never accepted;
+    exposure is released and the premium refunded. Only the buyer may cancel."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+
+    # Non-buyer cannot cancel.
+    direct_vm.sender = direct_owner
+    with direct_vm.expect_revert("only the buyer may cancel"):
+        contract.cancel_pending_policy("job-1")
+
+    direct_vm.sender = direct_charlie
+    contract.cancel_pending_policy("job-1")
+    assert contract.get_policy("job-1")["status"] == "expired"
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18
+
+
+def test_aggregate_exposure_capped(direct_vm, direct_deploy, direct_alice,
+                                   direct_bob, direct_charlie):
+    """FIX-03: aggregate live coverage per tier is capped at 50% of the pool,
+    so enough 10%-sized policies can no longer freeze LP capital forever."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    cov = 2 * 10**18  # exactly the 10%-of-20-GEN single-policy cap
+    prem = premium_for(cov, "unrated")
+    for i in range(5):
+        issue_policy(direct_vm, contract, direct_charlie, f"job-{i}", "agent-a",
+                     cov, SPEC, DEADLINE, prem)
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 5 * cov
+
+    # A 6th policy would push exposure past the 50% utilization cap.
+    with direct_vm.expect_revert("at capacity"):
+        issue_policy(direct_vm, contract, direct_charlie, "job-overflow", "agent-a",
+                     cov, SPEC, DEADLINE, prem)
+
+
+def test_bronze_requires_breach_rate(direct_vm, direct_deploy, direct_alice,
+                                     direct_bob, direct_charlie, direct_owner):
+    """FIX-07: bronze is gated on an actual breach-rate record, not monotonic
+    counts. An agent meeting the job/buyer/tenure thresholds but carrying a
+    1-in-3 breach rate stays unrated -- it must NOT be promoted to bronze."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
+    direct_vm.warp(T0)
+    deposit(direct_vm, contract, direct_alice, "unrated", 100 * 10**18)
+    register(direct_vm, contract, direct_bob, "agent-a")
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    # 3 jobs, 2 distinct buyers (charlie x2, owner x1).
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+    issue_policy(direct_vm, contract, direct_charlie, "job-2", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-2")
+    issue_policy(direct_vm, contract, direct_owner, "job-3", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-3")
+
+    # job-2 (charlie) and job-3 (owner) conform -> rejected claims (no breach).
+    for jid, buyer in (("job-2", direct_charlie), ("job-3", direct_owner)):
+        mock_cid(direct_vm, DELIV_OK, f"{jid} conforms")
+        direct_vm.sender = direct_bob
+        contract.submit_deliverable(jid, DELIV_OK)
+        mock_cid(direct_vm, SPEC, "spec for " + jid)
+        mock_judgement(direct_vm, 95)
+        direct_vm.sender = buyer
+        direct_vm.value = CLAIM_BOND
+        contract.file_claim(jid)
+        assert contract.get_claim_status(jid) == "rejected"
+
+    # job-1 never received a deliverable -> deterministic auto-breach (upheld).
+    direct_vm.warp(AFTER_DEADLINE)
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")
+    assert contract.get_claim_status("job-1") == "upheld"
+
+    # Now: 3 jobs, 2 distinct buyers, tenure elapsed -- but breach_rate is
+    # 1/3, above bronze's 0.20 ceiling and below penalty's 0.34 -> unrated.
+    p = contract.get_profile("agent-a")
+    assert p["claims_filed_against"] == 3
+    assert p["claims_upheld_against"] == 1
+    assert p["tier"] == "unrated"
+
+
+def test_penalty_tier_after_high_breach(direct_vm, direct_deploy, direct_alice,
+                                        direct_bob, direct_charlie, direct_owner):
+    """FIX-07: a chronic breacher (breach rate above PENALTY_BREACH_RATE) is
+    demoted to the penalty tier, priced WORSE than any newcomer (1200 bps).
+    The penalty pool must be funded for the tier to stick (FIX-08 fallback)."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
+    direct_vm.warp(T0)
+    deposit(direct_vm, contract, direct_alice, "unrated", 50 * 10**18)
+    deposit(direct_vm, contract, direct_alice, "penalty", 50 * 10**18)
+    register(direct_vm, contract, direct_bob, "agent-a")
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    for jid, buyer in (("job-1", direct_charlie), ("job-2", direct_owner)):
+        issue_policy(direct_vm, contract, buyer, jid, "agent-a",
+                     coverage, SPEC, DEADLINE, prem)
+        accept(direct_vm, contract, direct_bob, jid)
+
+    # Both jobs breach (no deliverable, deadline passed).
+    direct_vm.warp(AFTER_DEADLINE)
+    for jid, buyer in (("job-1", direct_charlie), ("job-2", direct_owner)):
+        direct_vm.sender = buyer
+        direct_vm.value = CLAIM_BOND
+        contract.file_claim(jid)
+        assert contract.get_claim_status(jid) == "upheld"
+
+    p = contract.get_profile("agent-a")
+    assert p["tier"] == "penalty"
+    quote = contract.quote_premium("agent-a", coverage)
+    assert quote["tier"] == "penalty"
+    assert quote["rate_bps"] == 1200
+
+
+def test_promotion_into_unfunded_falls_back(direct_vm, direct_deploy,
+                                            direct_alice, direct_bob,
+                                            direct_charlie, direct_owner):
+    """FIX-08: promotion into an unfunded tier falls back to the best funded
+    tier at or below -- an honest agent can never be stranded in a tier with no
+    underwriting capital (which would make them uninsurable)."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
+    direct_vm.warp(T0)
+    deposit(direct_vm, contract, direct_alice, "unrated", 50 * 10**18)  # no bronze pool
+    register(direct_vm, contract, direct_bob, "agent-a")
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    issue_policy(direct_vm, contract, direct_charlie, "job-2", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    direct_vm.warp(T_PLUS_4)  # tenure >= 3 days
+    # 3rd job + 2nd distinct buyer -> earns bronze, but bronze is unfunded.
+    issue_policy(direct_vm, contract, direct_owner, "job-3", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+
+    p = contract.get_profile("agent-a")
+    assert p["tier"] == "unrated"  # fell back instead of being stranded
+    assert contract.quote_premium("agent-a", coverage)["rate_bps"] == 600
+
+
+def test_permissionless_expiry_after_window(direct_vm, direct_deploy,
+                                            direct_alice, direct_bob,
+                                            direct_charlie, direct_owner):
+    """FIX-09: after the 7-day claim window closes, ANYONE can expire an
+    abandoned active policy and release its locked exposure."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    direct_vm.warp(PAST_WINDOW)  # 9 days after DEADLINE
+    direct_vm.sender = direct_owner  # not the buyer
+    contract.expire_policy("job-1")
+
+    assert contract.get_policy("job-1")["status"] == "expired"
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
+
+
+def test_file_claim_refused_after_window(direct_vm, direct_deploy, direct_alice,
+                                         direct_bob, direct_charlie):
+    """FIX-09: once the 7-day claim window has closed no claim may be filed --
+    this is what makes the permissionless expiry race-free."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    direct_vm.warp(PAST_WINDOW)
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    with direct_vm.expect_revert("claim window has closed"):
+        contract.file_claim("job-1")
+
+
+def test_out_of_range_score_rejected(direct_vm, direct_deploy, direct_alice,
+                                     direct_bob, direct_charlie):
+    """FIX-06: an out-of-range LLM score reverts the claim instead of being
+    silently clamped -- clamping would destroy the divergence signal the
+    validator comparison depends on."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    mock_cid(direct_vm, DELIV_BAD, "some deliverable")
+    direct_vm.sender = direct_bob
+    contract.submit_deliverable("job-1", DELIV_BAD)
+
+    mock_cid(direct_vm, SPEC, "some spec")
+    mock_judgement(direct_vm, 250)  # adversarial echo, not a real grade
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    with direct_vm.expect_revert("score out of range"):
+        contract.file_claim("job-1")
+    assert contract.get_claim_status("job-1") == "unresolved"
+
+
+def test_zero_share_deposit_rejected(direct_vm, direct_deploy, direct_alice,
+                                     direct_bob, direct_charlie):
+    """FIX-11: a deposit too small to mint any LP shares reverts instead of
+    silently burning the depositor's value."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    # Inflate pool balance above total shares by issuing (premium is credited
+    # to the pool with no matching share mint), so 1 atto mints 0 shares.
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+
+    direct_vm.sender = direct_charlie
+    direct_vm.value = 1  # 1 atto
+    with direct_vm.expect_revert("deposit too small"):
+        contract.deposit("unrated")
+
+
+def test_invalid_calendar_date_rejected(direct_vm, direct_deploy, direct_alice,
+                                        direct_bob, direct_charlie):
+    """FIX-15c: an impossible calendar date (2026-02-30) must not silently roll
+    over in epoch math -- it is rejected at issuance."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    with direct_vm.expect_revert("must be an ISO-8601"):
+        issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                     10**18, SPEC, "2026-02-30T00:00:00Z",
+                     premium_for(10**18, "unrated"))
+
+
+def test_rate_limit_maps_to_transient(direct_vm, direct_deploy, direct_alice,
+                                      direct_bob, direct_charlie):
+    """FIX-13: a per-validator 429 on the evidence gateway routes to a
+    transient error (revert + consensus rotation) -- never to a permanent
+    verdict, and never with status codes embedded in the [EXTERNAL] message."""
+    contract = direct_deploy("intelligent-contracts/aegis.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    mock_cid(direct_vm, DELIV_OK, "deliverable")
+    direct_vm.sender = direct_bob
+    contract.submit_deliverable("job-1", DELIV_OK)
+
+    # Gateway rate-limits the claim-time fetch of the spec.
+    direct_vm.mock_web(r".*" + SPEC + r".*", {"status": 429, "body": ""})
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    with direct_vm.expect_revert("rate-limited"):
+        contract.file_claim("job-1")
+    assert contract.get_claim_status("job-1") == "unresolved"

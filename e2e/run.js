@@ -32,7 +32,7 @@ const CONTRACT_PATH = path.join(__dirname, "..", "intelligent-contracts", "aegis
 const NETS = {
   studionet: {
     label: "StudioNet",
-    address: "0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4",
+    address: "0x589472da571Db60151100b153D65a7170367E17D", // Shape B (2026-09-06)
     chain: studionet,
     needsFunding: false,
   },
@@ -358,26 +358,67 @@ async function runE2E(netName, keys) {
   };
   let lastDeadlineMs = 0;
   const deadlineShort = dl(DEADLINE_S);
-  const pSubmit = P("job-submit");
-  const pClaim = P("job-claim");
+  const pReject = P("job-reject"); // agent declines while pending -> premium refunded
+  const pVeto = P("job-veto"); // accepted; URL CID rejected, then frozen after deadline
+  const pClaim = P("job-claim"); // accepted, never delivered -> auto-breach claim
   const pPast = P("job-past");
+  // Deterministic submit-side negatives that need NO live gateway (FIX-01):
+  // a URL-shaped string fails CID canonicalisation, and any submit after the
+  // deadline hits the freeze check before a probe ever runs. (The live probe
+  // rejection of an unresolvable CID is covered by the direct-mode test
+  // test_unresolvable_cid_submit_reverts -- w3s.link answers unknown CIDs with
+  // redirects/429s, so it is not a deterministic on-chain signal.)
+  const BAD_URL = "https://not-a-cid.example/deliverable.txt";
 
+  // ---- Issue + agent declines: PENDING -> EXPIRED, premium refunded (FIX-02) ----
   await write(
     accs.buyer,
     "issue_policy",
-    [pSubmit, agentId, COVERAGE, CID_SPEC, deadlineShort],
+    [pReject, agentId, COVERAGE, CID_SPEC, deadlineShort],
     PREMIUM_UNRATED,
     false,
-    "issue job-submit (payable)"
+    "issue job-reject (payable)"
   );
-  await write(accs.agent, "submit_deliverable", [pSubmit, CID_OK], 0n, false, "agent submits deliverable");
-  const polSubmit = await m.read("get_policy", [pSubmit]);
+  let pol = await m.read("get_policy", [pReject]);
+  step("policy starts PENDING (agent consent required)", pol?.status === "pending", `status=${pol?.status}`);
+  await write(accs.agent, "reject_job", [pReject], 0n, false, "agent rejects pending job");
+  pol = await m.read("get_policy", [pReject]);
+  step("rejected policy = expired", pol?.status === "expired", `status=${pol?.status}`);
+  pool = await m.read("get_pool_info", ["unrated"]);
   step(
-    "job-submit policy fields",
-    polSubmit?.status === "active" && polSubmit?.deliverable_hash === CID_OK && polSubmit?.agent_id === agentId.toLowerCase(),
-    `status=${polSubmit?.status} deliv=${polSubmit?.deliverable_hash}`
+    "premium refunded, nothing locked",
+    EQ(pool?.balance_atto, LP_DEPOSIT) && EQ(pool?.locked_exposure_atto, 0n),
+    `balance=${genFmt(pool?.balance_atto)} locked=${genFmt(pool?.locked_exposure_atto)}`
   );
 
+  // ---- Issue + accept, then submit-side negatives (FIX-01, gateway-free) ----
+  await write(
+    accs.buyer,
+    "issue_policy",
+    [pVeto, agentId, COVERAGE, CID_SPEC, deadlineShort],
+    PREMIUM_UNRATED,
+    false,
+    "issue job-veto (payable)"
+  );
+  await write(accs.agent, "accept_job", [pVeto], 0n, false, "agent accepts job-veto");
+  pol = await m.read("get_policy", [pVeto]);
+  step("accepted policy = active", pol?.status === "active", `status=${pol?.status}`);
+  await write(
+    accs.agent,
+    "submit_deliverable",
+    [pVeto, BAD_URL],
+    0n,
+    true,
+    "URL-shaped 'deliverable' REVERTS (canonical CID only)"
+  );
+  pol = await m.read("get_policy", [pVeto]);
+  step(
+    "no deliverable recorded after reject",
+    pol?.status === "active" && pol?.deliverable_hash === "",
+    `status=${pol?.status} deliv="${pol?.deliverable_hash}"`
+  );
+
+  // ---- Issue + accept the auto-breach claim target (never delivered) ----
   await write(
     accs.buyer,
     "issue_policy",
@@ -386,14 +427,18 @@ async function runE2E(netName, keys) {
     false,
     "issue job-claim (payable)"
   );
+  await write(accs.agent, "accept_job", [pClaim], 0n, false, "agent accepts job-claim");
 
   let profile2 = await m.read("get_profile", [agentId]);
-  step("jobs_insured = 2", EQ(profile2?.jobs_insured, 2n), `jobs=${profile2?.jobs_insured}`);
+  // FIX-02 keeps jobs_insured counted at issue (not at accept), so the declined
+  // job-reject still counts. distinct_buyers stayed 1 (same buyer wallet).
+  step("jobs_insured = 3", EQ(profile2?.jobs_insured, 3n), `jobs=${profile2?.jobs_insured}`);
   step("distinct_buyers = 1", EQ(profile2?.distinct_buyers, 1n), `buyers=${profile2?.distinct_buyers}`);
 
   pool = await m.read("get_pool_info", ["unrated"]);
+  // job-reject already refunded its premium; only job-veto + job-claim remain live.
   step(
-    "pool = 20 + 2 premiums, locked = 2",
+    "pool = 20 + 2 live premiums, locked = 2",
     EQ(pool?.balance_atto, LP_DEPOSIT + PREMIUM_UNRATED * 2n) && EQ(pool?.locked_exposure_atto, COVERAGE * 2n),
     `balance=${genFmt(pool?.balance_atto)} locked=${genFmt(pool?.locked_exposure_atto)}`
   );
@@ -417,8 +462,18 @@ async function runE2E(netName, keys) {
   console.log(`\n[wait] sleeping ~${Math.round(waitMs / 1000)}s for policy deadlines to pass...`);
   await sleep(waitMs);
 
-  // ---- Expire path: buyer closes job-submit after deadline (exposure released) ----
-  await write(accs.buyer, "expire_policy", [pSubmit], 0n, false, "buyer expires job-submit (deadline passed)");
+  // ---- Frozen after deadline (FIX-01): the agent cannot retro-add a deliverable ----
+  await write(
+    accs.agent,
+    "submit_deliverable",
+    [pVeto, CID_OK],
+    0n,
+    true,
+    "post-deadline submit REVERTS (deliverable frozen)"
+  );
+
+  // ---- Expire path: buyer closes job-veto after deadline (exposure released) ----
+  await write(accs.buyer, "expire_policy", [pVeto], 0n, false, "buyer expires job-veto (deadline passed)");
   pool = await m.read("get_pool_info", ["unrated"]);
   step("locked exposure = 1 (only job-claim left)", EQ(pool?.locked_exposure_atto, COVERAGE), `locked=${genFmt(pool?.locked_exposure_atto)}`);
 
@@ -429,7 +484,7 @@ async function runE2E(netName, keys) {
   const polClaim = await m.read("get_policy", [pClaim]);
   step("policy status = claimed", polClaim?.status === "claimed", `status=${polClaim?.status}`);
   pool = await m.read("get_pool_info", ["unrated"]);
-  // After payout (1 GEN, within 10% cap) + expire of job-submit (no transfer):
+  // After payout (1 GEN, within 10% cap) + expire of job-veto (no transfer):
   // balance = 20 + 2*premium - coverage
   const expectedBal = LP_DEPOSIT + PREMIUM_UNRATED * 2n - COVERAGE;
   step(
@@ -480,7 +535,9 @@ function argvFlag(name) {
 
 function runGenlayer(args) {
   return new Promise((resolve, reject) => {
-    execFile("genlayer", args, { maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
+    // The genlayer CLI on Windows is an npm .cmd shim; Node's execFile won't
+    // resolve .cmd via PATH without a shell.
+    execFile("genlayer", args, { shell: true, maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) return reject(new Error((stderr || stdout || err.message).trim().slice(0, 2000)));
       resolve(stdout);
     });

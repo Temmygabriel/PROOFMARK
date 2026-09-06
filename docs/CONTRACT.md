@@ -15,12 +15,13 @@ shares, and the deadline logic are all deterministic.
 ## The four moving parts
 
 1. **Agent identity & reputation** — one wallet binds to one `agent_id` at
-   registration. A tier (`unrated` / `bronze` / `silver` / `gold`) is derived
-   from real history (insured jobs, distinct buyers, tenure) — never requested
-   or self-declared.
-2. **Policies** — a buyer pays an exact, deterministic premium (coverage × the
-   agent's tier rate) to insure one `job_id` against a named agent for a
-   deadline.
+   registration. A tier (`penalty` / `unrated` / `bronze` / `silver` / `gold`) is
+   derived from real history (insured jobs, distinct buyers, tenure, breach
+   rate) — never requested or self-declared.
+2. **Policies** — a buyer pays at least a deterministic premium (coverage × the
+   agent's tier rate; overpayment is refunded) to open a `pending` policy on one
+   `job_id` against a named agent for a deadline. The named agent must accept it
+   (`accept_job`) before it becomes `active`.
 3. **LP pools** — LPs deposit native tokens into a tier and earn premiums.
    Per-claim payout is capped at **10% of that tier's pool**.
 4. **Claims** — the buyer stakes a claim bond and the claim is judged by GenVM
@@ -34,12 +35,15 @@ shares, and the deadline logic are all deterministic.
 | Method | Payable | Description |
 |--------|---------|-------------|
 | `register(agent_id)` | no | Bind the caller's wallet to `agent_id` (once). |
-| `issue_policy(job_id, agent_id, coverage_atto, spec_hash, deadline_iso)` | yes | Pay the exact premium to insure `job_id` against the agent. |
-| `submit_deliverable(job_id, deliverable_hash)` | no | The **insured agent** records their deliverable (IPFS CID). |
-| `expire_policy(job_id)` | no | Buyer closes an expired policy, releasing locked exposure. |
-| `deposit(tier)` | yes | LP adds capital to a tier pool. |
+| `issue_policy(job_id, agent_id, coverage_atto, spec_hash, deadline_iso, expected_tier="")` | yes | Pay **at least** the premium (excess refunded) to open a `pending` policy on `job_id` against the agent. Reverts if the agent's quoted tier moved (`expected_tier`). |
+| `accept_job(job_id)` | no | The **insured agent** consents to a `pending` policy → `active`, freezing the spec on-chain (FIX-02). |
+| `reject_job(job_id)` | no | The agent declines a `pending` policy → `expired`; exposure released, premium refunded to the buyer. |
+| `cancel_pending_policy(job_id)` | no | The buyer withdraws their own `pending` policy → `expired`; exposure released, premium refunded. |
+| `submit_deliverable(job_id, deliverable_hash)` | no | The **active** insured agent records a deliverable. The CID is canonicalized and probed live (unresolvable → revert); frozen once the deadline passes. |
+| `expire_policy(job_id)` | no | Close an expired policy, releasing locked exposure. Buyer may from the deadline; anyone may after the 7-day claim window (FIX-09). |
+| `deposit(tier)` | yes | LP adds capital to a tier pool (zero-share deposits are rejected, FIX-11). |
 | `withdraw(tier, shares)` | no | LP redeems shares (blocked if it would leave the pool below its locked exposure). |
-| `file_claim(job_id)` | yes | Buyer stakes `CLAIM_BOND_ATTO` and triggers judgement. |
+| `file_claim(job_id)` | yes | Buyer stakes `CLAIM_BOND_ATTO` and triggers judgement (refused once the claim window has closed). |
 
 ### View methods
 
@@ -48,7 +52,7 @@ shares, and the deadline logic are all deterministic.
 | `get_profile(agent_id)` | Agent's display name, tier, counters, owner, registration time. |
 | `agent_id_for_address(address)` | Reverse lookup of an agent by wallet. |
 | `quote_premium(agent_id, coverage_atto)` | Exact premium + tier rate for a policy. |
-| `get_policy(job_id)` | Status, coverage, deadline, deliverable hash. |
+| `get_policy(job_id)` | Status (`pending`/`active`/`claimed`/`expired`), coverage, deadline, deliverable hash, `agent_accepted`. |
 | `get_pool_info(tier)` | Pool balance, total shares, locked exposure. |
 | `get_lp_position(tier, address)` | An LP's share count in a tier. |
 | `get_claim_status(job_id)` | `none` / `pending` / `upheld` / `rejected`. |
@@ -64,10 +68,15 @@ shares, and the deadline logic are all deterministic.
 | `MAX_COVERAGE_BPS_OF_POOL` | 1000 | One policy's coverage is capped to 10% of the tier pool at issue (same share a single claim can ever pay). |
 | `MIN_DEADLINE_HORIZON_SECONDS` | 60 | A deadline must be at least this far in the future at issue. |
 | `MIN_COVERAGE_ATTO` | 0.01 GEN | Minimum coverage per policy (cost floor for tier progress). |
-| `RATE_BPS_BY_TIER` | unrated 600 / bronze 400 / silver 250 / gold 150 | Annualized premium basis points. |
+| `RATE_BPS_BY_TIER` | penalty 1200 / unrated 600 / bronze 400 / silver 250 / gold 150 | Annualized premium basis points. |
 | `MIN_DISTINCT_BUYERS_BY_TIER` | bronze 2 / silver 5 / gold 10 | Distinct buyer addresses needed to reach a tier. |
 | `MIN_TENURE_DAYS_BY_TIER` | bronze 3 / silver 14 / gold 45 | Days since registration needed to reach a tier. |
-| `EVIDENCE_GATEWAY` | `https://w3s.link/ipfs/` | IPFS gateway validators fetch evidence from. |
+| `MAX_BREACH_RATE_BY_TIER` | bronze 20% / silver 8% / gold 2% | Upheld-claim rate above this blocks promotion into the tier (FIX-07). |
+| `PENALTY_BREACH_RATE` | 34% | Breach rate above this drops an agent into the `penalty` tier (FIX-07). |
+| `MAX_UTILIZATION_BPS` | 5000 | Sum of live exposure ≤ 50% of a tier's pool value (aggregate freeze, FIX-03). |
+| `CLAIM_WINDOW_SECONDS` | 7 days | After `deadline + window` anyone may expire a policy; `file_claim` is refused (FIX-09). |
+| `MAX_CID_LEN` / `MAX_EVIDENCE_BYTES` | 64 chars / 128 KiB | CID shape cap and per-evidence size cap (FIX-01/FIX-05). |
+| `EVIDENCE_GATEWAY` | `https://w3s.link/ipfs/` | IPFS gateway validators fetch evidence from. Single immutable dependency (see residuals). |
 
 ## Security hardening (why each is there)
 
@@ -75,7 +84,9 @@ Every hardening here was either required by an earlier review pass or discovered
 during a direct-mode security review (2026-09-02) and fixed. Each is covered by a
 regression test in `tests/direct/test_aegis.py`. Items 7, 9 and 10 are the
 2026-09-03 "Shape A" pass — the response to the reviewer-facing self-dealing
-review — and shipped in the current canonical deploys (see DEPLOYMENT.md).
+review. Items 11–18 are the 2026-09-05 "Shape B" pass from the three-pass
+adversarial review in `SECURITY-CHECK/`. Shape B supersedes Shape A; the Shape A
+deploys are marked DO NOT USE (see DEPLOYMENT.md).
 
 1. **Canonical identity keys.** `agent_id` / `job_id` are user-typed strings with
    no external registry. `_normalize_key()` lowercases + strips them before use as
@@ -91,13 +102,19 @@ review — and shipped in the current canonical deploys (see DEPLOYMENT.md).
 3. **LPs can't withdraw from under live coverage.** `tier_locked_exposure` tracks
    total live coverage; `withdraw()` refuses to drop a tier's balance below it.
 
-4. **The buyer can't supply their own evidence.** Only the insured agent can call
-   `submit_deliverable`. A buyer can never point a claim at arbitrary content.
+4. **The agent consents to the job and its spec (FIX-02).** `issue_policy`
+   creates a `pending` policy; only the insured agent's `accept_job` activates
+   it, freezing `spec_hash` on-chain. A stranger can't be swept into a judged
+   claim against a spec they never saw, and the buyer still can't point a claim
+   at content the agent never accepted.
 
-5. **Evidence must be content-addressed.** `spec_hash` / `deliverable_hash` must
-   look like an IPFS CID (not a mutable URL), so every validator fetches identical
-   bytes. A mutable URL could be changed between the leader's fetch and a
-   validator's independent re-fetch.
+5. **Evidence is content-addressed and probed (FIX-01).** `spec_hash` /
+   `deliverable_hash` must be a canonical IPFS CID (CIDv0/CIDv1, ≤ 64 chars) —
+   not a mutable URL a validator could be shown different bytes for. At
+   `submit_deliverable` the CID is probed live over the gateway: an
+   unresolvable CID (HTTP ≥ 400) reverts, and a deliverable over the 128 KiB
+   cap is refused, so a non-deliverable can't silently masquerade as a delivered
+   job.
 
 6. **Tier promotion can't be bought by one wallet.** Promotion needs a minimum
    real spend per job, a minimum count of **distinct** buyer addresses, and real
@@ -126,35 +143,97 @@ review — and shipped in the current canonical deploys (see DEPLOYMENT.md).
    collects a payout it would never have needed. Buyer and agent are separate
    roles, which is how the honest market and the live demo already operate.
 
-10. **Coverage is capped to what a single claim can ever pay.** `issue_policy`
-    rejects coverage above `MAX_COVERAGE_BPS_OF_POOL` (10%) of the tier pool, so
-    no buyer holds a policy labeled "20 GEN cover" that one claim could only ever
-    pay ~2 GEN on — the label is the ceiling. This also bounds every
-    manufactured auto-breach round to that same share of a tier pool.
+10. **Coverage is capped against the pool at issue, and aggregate exposure is
+    capped too (FIX-03).** One policy's coverage is capped to
+    `MAX_COVERAGE_BPS_OF_POOL` (10%) of the tier pool at issue, and the sum of
+    live exposure can never exceed `MAX_UTILIZATION_BPS` (50%) of the pool's
+    value — so no buyer can freeze an LP's whole tier with one standing policy.
+    The label is the ceiling for the *first* claim; a later payout can be
+    smaller if the pool has shrunk.
+
+Items 11+ are the "Shape B" hardening pass (2026-09-05), driven by a
+three-pass adversarial review of Shape A. Each maps to a regression test in
+`tests/direct/test_aegis.py`.
+
+11. **Deliverable freeze after the deadline (FIX-01).** `submit_deliverable`
+    reverts once the deadline has passed — an agent can't retroactively "find"
+    a deliverable to answer a claim.
+12. **No silent score clamp (FIX-06).** Out-of-range LLM scores now revert
+    instead of clamping to 100, preserving the one divergence signal between
+    validators.
+13. **Chronic breach is priced, not absorbed (FIX-07).** Tiers carry breach-rate
+    gates (bronze ≤ 20%, silver ≤ 8%, gold ≤ 2%); a breach rate above
+    `PENALTY_BREACH_RATE` (34%) lands in a dedicated `penalty` tier priced at
+    1200 bps — worse than any newcomer. No sequence of honest claims demotes an
+    agent, and no sequence of upheld claims keeps a chronic breacher cheap.
+14. **Promotion never strands an agent (FIX-08).** Promotion into an unfunded
+    pool falls back to the best funded tier at or below the earned tier.
+15. **Bounded claim window (FIX-09).** The buyer may file/expire from the
+    deadline; after `deadline + CLAIM_WINDOW_SECONDS` (7 days) anyone may expire
+    to release exposure and `file_claim` is refused. Exposure can't be locked
+    forever by an absent buyer.
+16. **Validator error containment (FIX-10).** The validator half of judgement
+    catches any leader exception and votes accordingly instead of letting it
+    leak.
+17. **Prompt-injection hardening (FIX-04).** Evidence is framed as untrusted
+    input inside the grading prompt and a separate `injection` signal is read
+    from the grader; a truthy signal rejects the evidence rather than grading
+    it.
+18. **Zero-share deposits rejected (FIX-11)** and **overpayment refunded at
+    issue (FIX-14)** — the premium race is gone. **Ungoverned by design
+    (FIX-12):** the unused `admin` field and its constructor assignment are
+    removed; no keyholder can rotate the gateway, move balances, or change
+    verdicts. **Share keys are normalized addresses (FIX-15)** so case variants
+    can't fork an LP position, and the spec's own calendar is validated before
+    any deadline math.
 
 ## Known residual (deliberate, disclosed)
 
-- **Two wallets under one controller can still run a slow drip.** The self-buy
-  ban and the 10% coverage cap bound each round to ~10% of a tier pool and force
-  the *premiums on top*, but a buyer with a *separate* wallet for the agent can
-  still issue cover, let the agent miss the deadline, and collect
-  coverage − premium (~9.4% of the pool at the optimal round) on a default it
-  controls. Insurance that pays out more than its premium is the point of the
-  mechanism — an honest claim is economically identical to this one, so no
-  contract rule can allow the demo and forbid the drain. The real defence is
-  off-chain (the same controller is spending real gasless identity to extract
-  free test GEN) and, in production, agent reputation/underwriting (an upheld
-  claim against an agent's history prices future cover at the worst tier).
-  Bronze promotion still has no breach-rate gate — only silver/gold require
-  breach_rate ≤ 8%/2%. No live path reaches bronze today.
+- **Prompt injection raises the cost but doesn't close the class (FIX-04).**
+  The structural half of the mitigation is agent acceptance (FIX-02): an agent
+  who accepted a specific `spec_hash` on-chain consented to those exact bytes,
+  so a hostile *deliverable* has to pass the honest agent who wrote the spec it
+  answers. A malicious *spec* is a different failure — it prices insurance on
+  something the buyer controls — and is out of scope of the mechanism.
+- **A determined two-wallet controller can still run a slow drip.** The self-buy
+  ban, the 10% per-policy cap and the 50% aggregate cap bound each round, but a
+  buyer with a *separate* wallet for the agent can still issue cover, let the
+  deadline pass, and collect coverage − premium on a default it controls.
+  Insurance that pays out more than its premium is the point of the mechanism —
+  an honest claim is economically identical to this one, so no contract rule can
+  allow the demo and forbid the drain. The real defences are off-chain (identity
+  cost) and, in production, reputation/underwriting: the penalty tier (FIX-07)
+  now prices a chronic breacher at 1200 bps — worse than any newcomer — where
+  Shape A's bronze would have absorbed it.
+- **Third-party policy pressure is bounded, not impossible.** Issuance is
+  permissionless, so anyone can open (and pay for) a `pending` policy naming an
+  agent before the agent rejects it. Acceptance is the agent's veto and a reject
+  refunds the premium, but while `pending` the policy locks pool exposure and
+  counts toward the agent's `jobs_insured` (counted at issue by design, FIX-02).
+  A griefer can therefore spend premiums to briefly lock exposure and inflate
+  that one counter. Each attempt costs the attacker a premium, is capped at 10%
+  of the pool, can never reach judgement without the agent's acceptance, and
+  cannot promote the agent (tiers need distinct buyers, tenure, and a breach
+  gate).
+- **Judged claims run on a single immutable gateway (FIX-16).**
+  `EVIDENCE_GATEWAY` (`w3s.link`) is the one HTTP dependency for every judged
+  claim. If it changes its URL scheme, rate-limits the validator set's IP range,
+  or goes offline, every policy with a submitted deliverable becomes unclaimable
+  and its locked exposure cannot be released by any contract path — there is no
+  admin to rotate it (FIX-12 chose Option A). This is the primary operational
+  risk in v1.
 - **Judged claims have only been proven in direct mode.** The deterministic
   auto-breach path is proven live on StudioNet; the judged path (deliverable
   submitted → validators re-fetch both CIDs and score conformance) runs only in
-  direct-mode tests with web + LLM stubbed. It is the documented QA gap.
+  direct-mode tests with web + LLM stubbed. It is the documented QA gap, targeted
+  by a live judged claim in the Shape B evidence pass.
 
 ## Testing
 
 - **Direct mode (fast, in-memory):** `python -m pytest tests/direct/test_aegis.py -v`
-  — 28 tests covering every method plus the gaming vectors above.
+  — 46 tests covering every method plus the gaming vectors above (28 Shape A
+  tests adapted to the Shape B state machine + 18 new regression tests). Direct
+  mode runs the leader half only, so FIX-10's validator containment is verified
+  structurally + by lint, not executed here.
 - **On-chain smoke:** see [DEPLOYMENT.md](DEPLOYMENT.md) for the read/write
   verification run against both networks.
