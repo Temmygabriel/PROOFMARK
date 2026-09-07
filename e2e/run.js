@@ -32,13 +32,13 @@ const CONTRACT_PATH = path.join(__dirname, "..", "intelligent-contracts", "proof
 const NETS = {
   studionet: {
     label: "StudioNet",
-    address: "0x589472da571Db60151100b153D65a7170367E17D", // Shape B (2026-09-06)
+    address: "0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3", // Proofmark redeploy (2026-09-06)
     chain: studionet,
     needsFunding: false,
   },
   bradbury: {
     label: "Bradbury",
-    address: "0x79C15889D5070321176994373C440778a9eC47c1",
+    address: "0x79C15889D5070321176994373C440778a9eC47c1", // Shape A canonical (pre-rebrand, 2026-09-03). Proofmark fresh deploy blocked: 62,351 B source > Bradbury BlockPubdataLimitReached cap (largest known-good ~39,869 B).
     chain: testnetBradbury,
     needsFunding: true,
   },
