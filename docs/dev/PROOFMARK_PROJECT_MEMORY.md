@@ -18,12 +18,22 @@ hexagon-check, ConformanceStamp NOT DELIVERED/DELIVERED, proof-pill, feed keys
 `VERDICT_BOND_ATTO` + `penalty` tier. In-repo docs renamed to `PROOFMARK_*` and
 project-root deliverables brand-swept to grep-zero (Phases 4–5 done).
 **No ABI change** — the rename
-makes a new deploy artifact, so **Phase 6 redeploys StudioNet + Bradbury to fresh
-addresses** and re-runs the live proof on the Proofmark contract. The StudioNet
+made a new deploy artifact, and **Phase 6 is done**: StudioNet redeployed + re-proven
+on the fresh **Proofmark** contract `0x1c91f37F…D85f0c3` (37/37 e2e + 10/10
+verify-payments + seeded live board, 2026-09-06); the **Bradbury fresh deploy is
+blocked** (`BlockPubdataLimitReached` on the 62,351-byte source) and recorded as an
+honest residual — the Bradbury canonical address remains the pre-rename Shape A
+`0x79C1…`. The StudioNet
 e2e **37/37** run on `0x589472da571Db60151100b153D65a7170367E17D` (2026-09-06) is
 the **historical pre-rename validation**. GitHub repo was renamed to `proofmark`
-by the user (origin URL untouched; GitHub redirects). All old addresses below
-(`0x605e…`, `0x79C1…`) are pre-rebrand Shape A — superseded after Phase 6.
+by the user (origin URL untouched; GitHub redirects). Full current addresses are in
+the "Deployed contract addresses" section below (old `0x605e…`/`0x5894…` Shape
+A/B runs are historical).
+**Phase 7 (evidence + close-out) is DONE (2026-09-07):** canonical live evidence + re-verify command
+in `docs/PROOFMARK_LIVE_EVIDENCE.md`; the submission note + demo run-sheet/captions reconciled to the
+verified rebranded UI copy; `genlayer-project-explorer-submission.md` (a Rigor worked example) and
+`SECURITY-CHECK/e2e-deploy-spec.md` (historical Shape B runbook) kept verbatim on purpose. Push of
+the close-out commits deferred — the user pushes from this machine.
 
 ## What the project is
 
@@ -58,29 +68,42 @@ Four moving parts in the contract:
 
 ## Deployed contract addresses
 
-- **StudioNet (canonical, Shape A):** `0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4`
-  (deployed 2026-09-03, tx `0xf8e416dc…c6373d8fe`)
-  - **Full e2e 28/28 PASS on this address** (`e2e/results/studionet-e2e.log`):
-    register, LP deposit, 2× payable issue, deliverable, negative gates (incl.
-    past + sub-60 s deadlines), expire, auto-breach claim + payout, counters, LP
-    withdraw to pool 0. Live board re-seeded after the run (Unrated 10.06 /
-    locked 1.00, Bronze 5, Silver 3, Gold 2).
+**Canonical (Proofmark, rebranded artifact `proofmark.py`, `class Proofmark`):**
+- **StudioNet (canonical Proofmark):** `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`
+  (deployed 2026-09-06, tx `0x42d1f3c5…a621279`; `e2e/results/studionet.json`).
+  - **Full e2e 37/37 PASS** (`studionet-proofmark-e2e.log`) + **verify-payments 10/10
+    PASS** (`studionet-proofmark-verify-payments.log`: LP deposit→withdraw roundtrip
+    pool 0→5→0; auto-breach claim upheld, pool debited exactly 1.000000 GEN). V3 judged
+    skipped live (evidence-gateway CIDs unresolved — residual, see LIVE_EVIDENCE).
+  - **Seeded live board** (`studionet-seed-live.log`): Unrated 10.06 / locked 1.00
+    (live agent `agent-live-1788715641710`, active job `job-live-1788715641710`),
+    Bronze 5, Silver 3, Gold 2. Independently re-read 2026-09-07 — state persisted.
+  - Live evidence + re-verify: `docs/PROOFMARK_LIVE_EVIDENCE.md`.
   - StudioNet does NOT support `genlayer schema` ("not supported on this network").
   - StudioNet RPC is flaky: read/call sometimes fail with ECONNRESET / SSL session-id
     errors. Just retry — they succeed on the next attempt.
-  - `registered_at` observed on StudioNet includes fractional seconds
-    (`2026-09-02T04:22:05.627206Z`). The Shape A deadline guard (epoch-compare
-    added 2026-09-03) parses ISO to integer epoch seconds and slices off the
-    fractional tail, so sub-second slop is handled deterministically and a
-    deadline must clear a 60 s minimum horizon.
-- **Bradbury (canonical, Shape A):** `0x79C15889D5070321176994373C440778a9eC47c1`
-  (deployed 2026-09-03, tx `0x14222a14…3832350a`; read-verified live)
+  - `registered_at` on StudioNet includes fractional seconds; the deadline guard
+    (epoch-compare) parses ISO to integer epoch seconds, slices the fractional tail,
+    and requires a 60 s minimum horizon (Shape A fix, regression-tested).
+- **Bradbury (canonical but pre-rename Shape A):** `0x79C15889D5070321176994373C440778a9eC47c1`
+  (deployed 2026-09-03, tx `0x14222a14…3832350a`; read-verified live).
+  - **Proofmark fresh deploy BLOCKED (honest residual):** the 62,351-byte
+    `proofmark.py` is rejected by Bradbury with `invalid transaction:
+    BlockPubdataLimitReached` (largest known-good deploy ~39,869 B Shape A artifact).
+    One blocked attempt spent ~0.0014 GEN (30.495286 → 30.493878). No further
+    attempts per account-funds constraint. Canonical Bradbury address stays the
+    pre-rename Shape A bytecode until either the artifact shrinks or the limit
+    rises. `e2e/run.js` bradbury default carries this note.
   - **1 GEN deposit→withdraw roundtrip 7/7 PASS** (`e2e/results/bradbury-roundtrip.log`)
-    was proven on the prior generation; value semantics unchanged.
+    was proven on a prior generation; value semantics unchanged.
   - Bradbury `registered_at` is whole seconds (`2026-09-02T04:26:37Z`, no fraction).
   - Bradbury receipts have NO `consensus_data` — outcome is numeric
     `txExecutionResult` (1=return/ok, 2=error/revert, 0=NOT_VOTED); a
     `LEADER_TIMEOUT`/`IDLE` tx is undetermined, never ok.
+- **Historical Proofmark-era runs (pre-rename source):** StudioNet Shape B
+  `0x589472da571Db60151100b153D65a7170367E17D` (37/37 e2e, 2026-09-06 — the pre-rebrand
+  validation; `studionet-shapeb-e2e.log`); StudioNet Shape A `0x605e5BE4…` (28/28 e2e,
+  2026-09-03; `studionet-e2e.log`). Recorded as context in LIVE_EVIDENCE.
 - **Superseded (do not use):** 2026-09-02 unpatched generation — StudioNet
   `0xED90a97A77cd959bB278cBDfA0f2981dF5b5B843`, Bradbury
   `0xcBF48A444242919EEA65Ff5bB6BD9d2CB82506e2`; older still StudioNet `0x4870…`,

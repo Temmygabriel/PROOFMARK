@@ -17,6 +17,36 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **Phase 7 (evidence + close-out) — DONE (2026-09-07, commits `5282015` + `d790be7` + this one):**
+  new `docs/PROOFMARK_LIVE_EVIDENCE.md` with the canonical evidence (StudioNet `0x1c91…` 37/37 +
+  10/10 + seeded board, deploy tx, tx-hash tables, residuals incl. the Bradbury pubdata cap and the
+  judged-V3 gateway, re-verify command); `PROOFMARK_DEPLOYMENT.md` live-deploy table + env block →
+  `0x1c91…` (Bradbury `0x79C1…` caveated as pre-rename Shape A); `intelligent-contracts/README.md`
+  canonical table; `E2E_REPORT.md` historical-status banner; `page.tsx` seed baked to the 2026-09-06
+  seed (`SEEDED_CONTRACT` 0x1c91, ids `*-live-1788715641710`; esbuild TSX gate clean); `run.js`
+  Bradbury default carries the honest-residual note. Project-root deliverables swept: the submission
+  note + demo run-sheet/captions reconciled to the verified rebranded UI copy and the canonical
+  address; `genlayer-demo-manual.md` + playbook are brand-neutral (kept); `genlayer-project-explorer-submission.md`
+  is the **Rigor** worked example — a different product, kept verbatim; `SECURITY-CHECK/e2e-deploy-spec.md`
+  kept verbatim (historical Shape B runbook — its "0x79C1 DO NOT USE — unpatched" is technically
+  accurate: Bradbury runs unpatched Shape A; the current framing lives in DEPLOYMENT/LIVE_EVIDENCE).
+  §12 grep still clean (sole exemption: the two legacy-key literals in `identity.ts`). Auto-memory
+  refreshed to the canonical Proofmark state. **Push deferred** per the standing rule.
+- **Phase 6 (live redeploy + re-proof) — DONE (StudioNet), Bradbury = honest residual:**
+  rebranded `proofmark.py` deployed to StudioNet **canonical
+  `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`** (2026-09-06, deploy tx
+  `0x42d1f3c5…a621279`): **e2e 37/37 PASS** (`studionet-proofmark-e2e.log` +
+  `studionet.json`), **verify-payments 10/10 PASS** (`studionet-proofmark-verify-
+  payments.log`; V3 judged skipped — gateway CIDs unresolved, recorded residual),
+  **seeded live board** (`studionet-seed-live.log`; independently re-read
+  2026-09-07, state persisted) baked into `page.tsx` (`SEEDED_CONTRACT` 0x1c91,
+  seed ids `job/agent-live-1788715641710`; esbuild TSX gate clean). **Bradbury
+  fresh deploy BLOCKED:** the 62,351-byte source exceeds Bradbury's per-tx pubdata
+  cap (`invalid transaction: BlockPubdataLimitReached`; largest known-good
+  ~39,869 B Shape A artifact). One blocked attempt cost ~0.0014 GEN; no further
+  attempts per the funds constraint. Canonical Bradbury address remains the
+  pre-rename Shape A `0x79C1…` (documented residual, no code/provenance change).
+  Fresh evidence in `docs/PROOFMARK_LIVE_EVIDENCE.md`.
 - **Phase 5 (content sweep) — DONE:** project-root deliverables brand-swept to
   grep-zero — `proofmark-submission-note.md`, demo run-sheet, demo caption
   cards, `SECURITY-CHECK/*.md`. Product-name prose → Proofmark; file-path refs
@@ -26,7 +56,7 @@ Phase state (newest first):
   in-file (989 chars, fits). Exempt by design: `proofmark-rebrand-spec.md`
   (the rename authority — its mapping tables must keep the old names) and
   `.claude/settings.local.json` (machine paths + allowlist). Canonical
-  addresses/URLs in these docs refresh after the Phase 6 redeploy.
+  addresses/URLs in these docs refresh in the Phase 7 close-out.
 - **Phase 4 — DONE:** in-repo docs rebrand. Six docs renamed via `git mv` to
   `PROOFMARK_CONTRACT.md` / `PROOFMARK_DEPLOYMENT.md` / `PROOFMARK_UX_FLOW.md` /
   `PROOFMARK_E2E_REPORT.md` / `PROOFMARK_PROGRESS.md` /
@@ -81,14 +111,14 @@ Phase state (newest first):
   `0x589472da571Db60151100b153D65a7170367E17D` — recorded as the *pre-rename
   validation*).
 
-Next: **Phase 6 — redeploy + re-proof** on the rebranded contract. StudioNet:
-deploy `intelligent-contracts/proofmark.py` to a fresh address, read-verify,
-run the full e2e (37/37) + `verify-payments.js`, reconcile the pinned S3
-objects to a gateway-fetchable CID for the judged (V3) claim if possible, then
-`seed-live.js` and bake the new `SEEDED_CONTRACT`/`SEED_ACTIVITY` into
-`page.tsx` (esbuild gate). Bradbury: deploy-only to a fresh address. Then
-Phase 7 evidence + manual Vercel env rename (`NEXT_PUBLIC_PROOFMARK_*`) +
-URL refresh in the project-root deliverables.
+Next (remaining — all on the user's side or optional): **manual Vercel step** — rename the env vars
+to the `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS` / `NEXT_PUBLIC_PROOFMARK_NETWORK` pair, set the new
+StudioNet address `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`, remove the old-name env vars, redeploy
+(the old Vercel domain is replaced). Then the demo take: dry-run the §05 path live on a fresh profile,
+film from the run-sheet/captions, fill the remaining `[YOU: …]` blanks in the submission note (logo,
+dropdown tags, YouTube link, the planted job id), and submit. Optional: live judged-path (V3) smoke on
+StudioNet after the demo take, re-verifying the §05 board numbers if its payout shifts a pool. Push of
+the Phase 7 commits is deferred — the user handles pushes from this machine.
 
 ## Status (2026-09-03)
 
