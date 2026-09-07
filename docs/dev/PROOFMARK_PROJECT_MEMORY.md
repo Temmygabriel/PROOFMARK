@@ -32,8 +32,9 @@ A/B runs are historical).
 **Phase 7 (evidence + close-out) is DONE (2026-09-07):** canonical live evidence + re-verify command
 in `docs/PROOFMARK_LIVE_EVIDENCE.md`; the submission note + demo run-sheet/captions reconciled to the
 verified rebranded UI copy; `genlayer-project-explorer-submission.md` (a Rigor worked example) and
-`SECURITY-CHECK/e2e-deploy-spec.md` (historical Shape B runbook) kept verbatim on purpose. Push of
-the close-out commits deferred — the user pushes from this machine.
+`SECURITY-CHECK/e2e-deploy-spec.md` (historical Shape B runbook) kept verbatim on purpose. All rebrand
+commits were **pushed to GitHub 2026-09-07** (`origin/main` → `9a02783`); the Vercel env rename
+(`NEXT_PUBLIC_PROOFMARK_*` = StudioNet `0x1c91…`) is the last manual step.
 
 ## What the project is
 

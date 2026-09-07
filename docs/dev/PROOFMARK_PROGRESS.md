@@ -31,7 +31,8 @@ Phase state (newest first):
   kept verbatim (historical Shape B runbook — its "0x79C1 DO NOT USE — unpatched" is technically
   accurate: Bradbury runs unpatched Shape A; the current framing lives in DEPLOYMENT/LIVE_EVIDENCE).
   §12 grep still clean (sole exemption: the two legacy-key literals in `identity.ts`). Auto-memory
-  refreshed to the canonical Proofmark state. **Push deferred** per the standing rule.
+  refreshed to the canonical Proofmark state. **All rebrand commits pushed to GitHub 2026-09-07**
+  (`origin/main` → `9a02783`; GitHub redirects the old `Temmygabriel/Aegis` URL to `Temmygabriel/PROOFMARK`).
 - **Phase 6 (live redeploy + re-proof) — DONE (StudioNet), Bradbury = honest residual:**
   rebranded `proofmark.py` deployed to StudioNet **canonical
   `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`** (2026-09-06, deploy tx
@@ -117,8 +118,9 @@ StudioNet address `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`, remove the old-n
 (the old Vercel domain is replaced). Then the demo take: dry-run the §05 path live on a fresh profile,
 film from the run-sheet/captions, fill the remaining `[YOU: …]` blanks in the submission note (logo,
 dropdown tags, YouTube link, the planted job id), and submit. Optional: live judged-path (V3) smoke on
-StudioNet after the demo take, re-verifying the §05 board numbers if its payout shifts a pool. Push of
-the Phase 7 commits is deferred — the user handles pushes from this machine.
+StudioNet after the demo take, re-verifying the §05 board numbers if its payout shifts a pool. All
+rebrand commits are pushed to GitHub (2026-09-07, `origin/main` = `9a02783`); after the env flip,
+confirm the Vercel rebuild deployed the rebrand (page foot + board numbers on the new address).
 
 ## Status (2026-09-03)
 
