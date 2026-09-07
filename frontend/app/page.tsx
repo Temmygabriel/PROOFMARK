@@ -1376,6 +1376,7 @@ export default function Home() {
     bronze: null,
     silver: null,
     gold: null,
+    penalty: null,
   });
   const [poolsBusy, setPoolsBusy] = useState(true);
   const [poolsError, setPoolsError] = useState<string | null>(null);
@@ -1390,7 +1391,7 @@ export default function Home() {
     setPoolsBusy(true);
     setPoolsSlow(false);
     setPoolsError(null);
-    const next: Record<Tier, PoolSnap> = { unrated: null, bronze: null, silver: null, gold: null };
+    const next: Record<Tier, PoolSnap> = { unrated: null, bronze: null, silver: null, gold: null, penalty: null };
     for (const t of TIERS) {
       try {
         const i = await getPoolInfo(t);
