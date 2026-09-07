@@ -1,5 +1,15 @@
 # Proofmark — Real-Network E2E Test Report
 
+> **Status: historical report (pre-rename Shape A era, 2026-09-02/03).** The runs
+> below predate the Shape B hardening and the product rebrand to Proofmark. The
+> **canonical, current** live evidence for the rebranded Proofmark contract
+> (`intelligent-contracts/proofmark.py`) is in
+> [../PROOFMARK_LIVE_EVIDENCE.md](../PROOFMARK_LIVE_EVIDENCE.md): StudioNet
+> `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`, **37/37** e2e + **10/10**
+> verify-payments + seeded live board (2026-09-06). The Shape B pre-rename run
+> (37/37 on `0x589472da…`, 2026-09-06) is also recorded there. This page keeps the
+> outcome-detection write-up (§4) and the historical Shape A numbers.
+
 Harness: `e2e/run.js` + `e2e/roundtrip.js` (genlayer-js — the same SDK the
 frontend uses, chosen because the `genlayer` CLI cannot attach `value` to
 contract writes). Both scripts sign locally with harness keys in
@@ -21,8 +31,9 @@ The 2026-09-03 StudioNet run re-proved the full lifecycle against the
 gaming-hardened source on the current canonical deploy (its `e2e/results/
 studionet-e2e.log` also exercises the new sub-60 s deadline revert). The two
 2026-09-02 rows are the prior-generation runs; details in the sections below
-were captured then. All four contracts deployed from the same source file:
-`intelligent-contracts/proofmark.py`.
+were captured then. All four contracts deployed from the same source lineage:
+the pre-rename Shape A contract source (the file is now `proofmark.py` after
+the rebrand).
 
 ---
 

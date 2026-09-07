@@ -7,31 +7,37 @@ deployment actually succeeded.
 
 | Network | Chain ID | Contract address | Deployed | E2E verified |
 |---------|----------|------------------|----------|--------------|
-| StudioNet | 61999 | `0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4` | 2026-09-03 | ✅ **28/28 steps** — full lifecycle (`e2e/results/studionet-e2e.log`) |
-| Testnet Bradbury | 4221 | `0x79C15889D5070321176994373C440778a9eC47c1` | 2026-09-03 | deploy verified by reads (no full e2e on Bradbury — StudioNet covers the scenario) |
+| **StudioNet** | 61999 | **`0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`** | 2026-09-06 | ✅ **37/37 steps** + **10/10 verify-payments** + seeded live board (`e2e/results/studionet-proofmark-e2e.log`) — see [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) |
+| Testnet Bradbury | 4221 | `0x79C15889D5070321176994373C440778a9eC47c1` | 2026-09-03 | deploy-only read-verified — **pre-rename Shape A artifact** (see note) |
 
-> These are the **canonical, latest** addresses — both deployed 2026-09-03 from
-> the **Shape A hardened** `intelligent-contracts/proofmark.py` (self-buy ban, epoch
-> deadline compare + 60 s minimum horizon, coverage capped to 10% of the tier
-> pool). The prior generation (`0xED90…` StudioNet, `0xcBF4…` Bradbury,
-> deployed 2026-09-02) runs the unpatched source and should **not** be used.
+> The **canonical** StudioNet address above is the rebranded **Proofmark** contract —
+> deployed 2026-09-06 from `intelligent-contracts/proofmark.py` (`class Proofmark`,
+> Shape B + rebrand), re-proven live at 37/37 + 10/10 + seeded board. Full evidence in
+> [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md).
+>
+> **Bradbury note:** a fresh Proofmark deploy to Bradbury is **blocked** — the 62,351-byte
+> source exceeds Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest
+> known-good deploy was the ~39,869-byte Shape A artifact). The address above therefore still
+> runs the pre-rename Shape A bytecode from 2026-09-03 and is kept as the canonical Bradbury
+> address only for that reason. See the evidence doc for the full honest residual.
 
 - Deploy account (`default`): `0xa881365a99d77be904e414ae610e22938bb0466d`
-- Deploy txs (proof they finalized): StudioNet
-  `0xf8e416dc78f142cff43a7efe05b59e62f2d5b0b6ad6602e18401938c6373d8fe`;
-  Bradbury
-  `0x14222a1446ade8c71f224b889693bf736c090c824ee17f68e67952a03832350a`.
-- The full 28-step StudioNet run exercised register, LP deposit, quoting,
-  2× payable policy issuance, deliverable submit, all negative/gate reverts
-  (now including past **and** sub-60 s deadlines), expire, auto-breach claim +
-  payout, counters, and LP withdraw to pool 0.
-- The earlier-generation Bradbury roundtrip proved value moves **in and back
-  out** on a successful payable pair (deposit 1 GEN → pool 1 GEN → withdraw
-  1 GEN → pool 0); this generation is verified on Bradbury by reads/writes only.
+- StudioNet deploy tx (Proofmark, canonical):
+  `0x42d1f3c5149c202e89e612ac1678b6115e3745bec82c87df1ae878aa6a621279`.
+- The full 37-step run exercised register, LP deposit, quoting, 3× payable policy
+  issuance, deliverable submit (canonical CID only), all negative/gate reverts
+  (past **and** sub-60 s deadlines), expire, auto-breach claim + payout, counters,
+  and LP withdraw to pool 0.
+- verify-payments proved value movement: LP deposit/withdraw round-trip (pool
+  0→5→0) and an upheld auto-breach claim that debited the pool exactly 1.000000 GEN.
+- Historical runs (not canonical, kept for provenance): Shape A 28/28 on
+  `0x605e5BE4…` (2026-09-03); pre-rename Shape B 37/37 on `0x589472da…` (2026-09-06).
+  Do **not** use the 2026-09-02 generation (`0xED90…` StudioNet, `0xcBF4…`
+  Bradbury) — it runs the unpatched source.
 
 ### Explorer links
 
-- StudioNet: `https://explorer-studio.genlayer.com/address/0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4`
+- StudioNet: `https://explorer-studio.genlayer.com/address/0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`
 - Bradbury:
   `https://explorer-bradbury.genlayer.com/address/0x79C15889D5070321176994373C440778a9eC47c1`
 
@@ -41,12 +47,13 @@ The Next.js frontend reads these at build time (set them in Vercel). The live
 Vercel deployment points at **StudioNet** (gasless):
 
 ```env
-NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4
+NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3
 NEXT_PUBLIC_PROOFMARK_NETWORK=studionet
 ```
 
-If you'd rather run the frontend against **Bradbury** (no rate limits), swap in
-its deployment instead — both are verified live:
+If you'd rather run the frontend against **Bradbury** (no rate limits), you can swap in its
+deployment — but note the Bradbury address currently runs the pre-rename Shape A artifact,
+not the rebranded Proofmark bytecode (see the note above):
 
 ```env
 NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x79C15889D5070321176994373C440778a9eC47c1
