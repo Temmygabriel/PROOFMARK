@@ -97,9 +97,16 @@ async function write(
     value,
   });
 
+  // StudioNet finalizes slowly and intermittently: the SDK's default 30s wait
+  // (10 x 3s) can run out while a tx sits at ACCEPTED, making a *successful*
+  // write look like a failure -- and tempting a retry that would double a
+  // payable value (deposit/issue/file_claim). Wait up to ~2 min for FINALIZED
+  // before reporting a failure (observed: register reached FINALIZED ~30-60s in).
   const receipt = await client.waitForTransactionReceipt({
     hash,
     status: TransactionStatus.FINALIZED,
+    interval: 3000,
+    retries: 40,
   });
 
   // Positive success check (H-04): FINALIZED/ACCEPTED is a *lifecycle* state,
