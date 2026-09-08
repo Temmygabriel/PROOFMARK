@@ -546,6 +546,40 @@ def test_claim_auto_breach_when_no_deliverable_after_deadline(
     assert info["balance_atto"] == 20 * 10**18 + prem - coverage
 
 
+def test_payouts_leave_over_external_ethsend_rail(
+    direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
+):
+    """PAYOUT-FIX-20 regression: every payee is a plain EOA wallet, so value
+    must leave over the EXTERNAL (EthSend) rail -- never an IC-to-IC
+    PostMessage to an address with no intelligent contract deployed (the bug
+    that made each payout transfer finalize with a GenVM Execution ERROR and
+    never credit the wallet). The direct VM records the gl_call request type
+    of each emit in its trace: assert a payout emits EthSend and no value
+    transfer routes as PostMessage."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    direct_vm.warp("2026-03-02T00:00:00Z")  # after deadline, no deliverable
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")  # auto-breach: payout + bond refund
+
+    assert contract.get_claim_status("job-1") == "upheld"
+    traces = list(direct_vm._traces)
+    assert any("EthSend" in t for t in traces), (
+        f"payout did not use the external EthSend rail -- {traces}"
+    )
+    assert not any("PostMessage" in t for t in traces), (
+        f"value routed as IC-to-IC PostMessage to an EOA (bug) -- {traces}"
+    )
+
+
 def test_claim_judged_upheld(direct_vm, direct_deploy, direct_alice, direct_bob,
                              direct_charlie):
     """Judged path: agent submitted a deliverable that DOES NOT meet spec ->

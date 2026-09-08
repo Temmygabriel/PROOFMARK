@@ -174,6 +174,12 @@ class Policy:
     pool_tier: str
     status: str
     agent_accepted: bool
+@gl.evm.contract_interface
+class _EoaPay:
+    class View:
+        pass
+    class Write:
+        pass
 class Proofmark(gl.Contract):
     agents: TreeMap[str, AgentProfile]
     address_to_agent: TreeMap[str, str]
@@ -361,8 +367,8 @@ class Proofmark(gl.Contract):
             )
         self.tier_balance[tier] = u256(pool_value + premium_atto)
         if paid > premium_atto:
-            gl.get_contract_at(gl.message.sender_address).emit_transfer(
-                value=u256(paid - premium_atto), on="finalized"
+            _EoaPay(gl.message.sender_address).emit_transfer(
+                value=u256(paid - premium_atto)
             )
         self.tier_locked_exposure[tier] = u256(new_total_exposure)
         self.policies[job_key] = Policy(
@@ -454,8 +460,8 @@ class Proofmark(gl.Contract):
         tier = policy.pool_tier
         bal = int(self.tier_balance[tier]) if tier in self.tier_balance else 0
         self.tier_balance[tier] = u256(max(0, bal - premium))
-        gl.get_contract_at(policy.buyer).emit_transfer(
-            value=u256(premium), on="finalized"
+        _EoaPay(policy.buyer).emit_transfer(
+            value=u256(premium)
         )
     def _probe_evidence(self, cid: str) -> None:
         def leader_fn() -> dict:
@@ -603,8 +609,8 @@ class Proofmark(gl.Contract):
         self.lp_shares[share_key] = u256(owned - requested)
         self.tier_shares[tier] = u256(total_shares - requested)
         self.tier_balance[tier] = u256(pool_value - payout)
-        gl.get_contract_at(gl.message.sender_address).emit_transfer(
-            value=u256(payout), on="finalized"
+        _EoaPay(gl.message.sender_address).emit_transfer(
+            value=u256(payout)
         )
     @gl.public.view
     def get_pool_info(self, tier: str) -> dict:
@@ -668,10 +674,8 @@ class Proofmark(gl.Contract):
             cap = (pool_value * MAX_PAYOUT_BPS_OF_POOL) // 10000
             payout = min(int(policy.coverage_atto), cap)
             self.tier_balance[tier] = u256(pool_value - payout)
-            gl.get_contract_at(policy.buyer).emit_transfer(value=u256(payout), on="finalized")
-            gl.get_contract_at(policy.buyer).emit_transfer(
-                value=u256(CLAIM_BOND_ATTO), on="finalized"
-            )
+            _EoaPay(policy.buyer).emit_transfer(value=u256(payout))
+            _EoaPay(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO))
         else:
             self.tier_balance[tier] = u256(pool_value + CLAIM_BOND_ATTO)
         self._recompute_tier(agent_key)
@@ -703,7 +707,7 @@ class Proofmark(gl.Contract):
         if gl.message.sender_address != policy.buyer:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} only the policy buyer may rescind the pending claim")
         del self.pending_claims[job_key]
-        gl.get_contract_at(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO), on="finalized")
+        _EoaPay(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO))
     def _judge_breach(self, spec_hash: str, deliverable_hash: str) -> dict:
         def leader_fn() -> dict:
             spec_res = gl.nondet.web.get(EVIDENCE_GATEWAY + spec_hash)

@@ -11,10 +11,12 @@ Single-contract v1, built for studio.genlayer.com (StudioNet).
 
 Everything lives in one gl.Contract: agent identity/reputation, policy
 issuance and pricing, per-tier LP pools, and the GenLayer-consensus claims
-judge. The only external calls are plain native-token transfers
-(`emit_transfer`) to pay a claim or return LP capital -- made from ordinary
-deterministic write methods, never from inside the leader/validator
-closures.
+judge. Every value transfer pays a plain EOA wallet -- the buyer, the agent,
+or an LP -- so payouts go over the EXTERNAL (EthSend) message rail via the
+@gl.evm.contract_interface _EoaPay handle (PAYOUT-FIX-20): an IC-to-IC
+PostMessage to an empty address would fail to credit a wallet. Transfers are
+made from ordinary deterministic write methods, never from inside the
+leader/validator closures.
 
 Design rules:
 - Non-performance / SLA-breach is the only thing GenLayer judges here.
@@ -163,7 +165,8 @@ Shape B hardening (security-fixes pass, post Shape A):
   (FIX-14): issue_policy accepts value >= premium and refunds the excess,
   removing the exact-premium front-run race. LP share keys and addresses are
   normalized (FIX-15), impossible calendar dates are rejected, and every
-  emit_transfer is on="finalized" with reentrancy notes (FIX-17).
+  payout goes to an EOA over the external EthSend rail (_EoaPay), which only
+  executes on finality (FIX-17 reentrancy guarantee preserved).
 - Two-phase claims (FIX-19): file_claim is payable and DETERMINISTIC -- it
   escrows the 2 GEN bond and, for a judged path, only records a pending claim.
   The non-deterministic conformance judgement runs in a separate NON-payable
@@ -474,6 +477,26 @@ class Policy:
     agent_accepted: bool   # False until the insured agent calls accept_job (FIX-02)
 
 
+@gl.evm.contract_interface
+class _EoaPay:
+    """External value rail (PAYOUT-FIX-20). Every Proofmark payee is a plain
+    EOA wallet -- the buyer, the agent, an LP -- with NO intelligent contract
+    deployed at that address. Sending their GEN via gl.get_contract_at(payee)
+    .emit_transfer routed it as an IC-to-IC PostMessage, which an empty address
+    cannot receive: the child transfer failed and value left the pool ledger
+    but never reached the wallet. The documented way to credit a chain-layer
+    EOA is an @gl.evm.contract_interface stub: _EoaPay(payee).emit_transfer(...)
+    compiles to an external EthSend that credits the wallet normally. External
+    messages only execute on finality, so the old on='finalized' reentrancy
+    guarantee (FIX-17) still holds -- state commits before the transfer runs."""
+
+    class View:
+        pass
+
+    class Write:
+        pass
+
+
 class Proofmark(gl.Contract):
     agents: TreeMap[str, AgentProfile]
     address_to_agent: TreeMap[str, str]
@@ -735,10 +758,11 @@ class Proofmark(gl.Contract):
 
         self.tier_balance[tier] = u256(pool_value + premium_atto)
         if paid > premium_atto:
-            gl.get_contract_at(gl.message.sender_address).emit_transfer(
-                value=u256(paid - premium_atto), on="finalized"
-                # on="finalized" means GenLayer commits all state before any
-                # transfer executes. Classic EVM reentrancy cannot occur here.
+            _EoaPay(gl.message.sender_address).emit_transfer(
+                value=u256(paid - premium_atto)
+                # External (EthSend) rail back to the payer's EOA wallet. External
+                # messages only execute on finality, so state commits before any
+                # transfer executes -- classic EVM reentrancy cannot occur here.
             )
 
         self.tier_locked_exposure[tier] = u256(new_total_exposure)
@@ -868,10 +892,11 @@ class Proofmark(gl.Contract):
         tier = policy.pool_tier
         bal = int(self.tier_balance[tier]) if tier in self.tier_balance else 0
         self.tier_balance[tier] = u256(max(0, bal - premium))
-        gl.get_contract_at(policy.buyer).emit_transfer(
-            value=u256(premium), on="finalized"
-            # on="finalized" means GenLayer commits all state before any
-            # transfer executes. Classic EVM reentrancy cannot occur here.
+        _EoaPay(policy.buyer).emit_transfer(
+            value=u256(premium)
+            # External (EthSend) rail back to the buyer's EOA wallet. External
+            # messages only execute on finality, so state commits before any
+            # transfer executes -- classic EVM reentrancy cannot occur here.
         )
 
     def _probe_evidence(self, cid: str) -> None:
@@ -1088,10 +1113,12 @@ class Proofmark(gl.Contract):
         self.tier_shares[tier] = u256(total_shares - requested)
         self.tier_balance[tier] = u256(pool_value - payout)
 
-        gl.get_contract_at(gl.message.sender_address).emit_transfer(
-            value=u256(payout), on="finalized"
-            # on="finalized": GenLayer commits all state before any transfer
-            # executes, so the sender cannot re-enter this contract mid-call.
+        _EoaPay(gl.message.sender_address).emit_transfer(
+            value=u256(payout)
+            # External (EthSend) rail back to the LP's EOA wallet. External
+            # messages only execute on finality: GenLayer commits all state
+            # before any transfer executes, so the sender cannot re-enter this
+            # contract mid-call.
         )
 
     @gl.public.view
@@ -1198,15 +1225,13 @@ class Proofmark(gl.Contract):
             payout = min(int(policy.coverage_atto), cap)
             self.tier_balance[tier] = u256(pool_value - payout)
 
-            gl.get_contract_at(policy.buyer).emit_transfer(value=u256(payout), on="finalized")
-            # on="finalized": state commits before the transfer executes --
-            # the buyer cannot re-enter this contract mid-claim.
+            _EoaPay(policy.buyer).emit_transfer(value=u256(payout))
+            # External (EthSend) rail: state commits before the transfer
+            # executes, so the buyer cannot re-enter this contract mid-claim.
             # Legitimate claim -- refund the anti-spam bond to the buyer.
-            gl.get_contract_at(policy.buyer).emit_transfer(
-                value=u256(CLAIM_BOND_ATTO), on="finalized"
-                # Same on="finalized" guarantee: re-entry is impossible
-                # because this call's effects are already committed.
-            )
+            _EoaPay(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO))
+            # External (EthSend) rail: only executes on finality -- re-entry
+            # is impossible because this call's effects are already committed.
         else:
             # Bond forfeited into the pool it would otherwise have drawn from --
             # compensates LPs for the cost of running consensus on a claim
@@ -1266,7 +1291,7 @@ class Proofmark(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} only the policy buyer may rescind the pending claim")
 
         del self.pending_claims[job_key]
-        gl.get_contract_at(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO), on="finalized")
+        _EoaPay(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO))
 
     def _judge_breach(self, spec_hash: str, deliverable_hash: str) -> dict:
         def leader_fn() -> dict:
