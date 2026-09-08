@@ -17,6 +17,15 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **Frontend fixes while filming (2026-09-08, commits `59691aa` + next):** the live
+  dashboard surfaced two issues worth recording. (a) `register` (and any write) could
+  report "Timed out waiting … FINALIZED (current status: 5)" even after success — the
+  SDK's default 30s wait (10×3s) runs out while StudioNet lingers at ACCEPTED; verified
+  on-chain the reported register tx was FINALIZED + not reverted, then widened the wait
+  to ~2 min in `proofmarkClient.write` (a payable retry would double value). (b) the
+  identity dropdown `.idmenu` has no height cap and the sticky topbar pins it below the
+  viewport, so its last section (Danger zone → Generate new identity) was unreachable on
+  short screens; now capped to the viewport with internal `overflow-y: auto`.
 - **Submission wrap-up (2026-09-08)** — three finishing moves after the Phase-7b live
   proof, all on the canonical hardened `0x850F…`:
   (1) **A real payout planted on the canonical board.** The seeded job

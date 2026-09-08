@@ -1051,6 +1051,15 @@ select.input option {
   right: 0;
   width: 320px;
   max-width: calc(100vw - 24px);
+  /* The topbar is sticky, so a tall menu hangs below the viewport bottom and the
+     page can't be scrolled far enough to reach it. Cap it to the viewport and
+     let it scroll internally (the lower "Danger zone / Generate new identity"
+     section stays reachable on short screens). ~92px = topbar + gap + margin. */
+  max-height: calc(100vh - 92px);
+  max-height: calc(100dvh - 92px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 14px;
   border-radius: 16px;
   border: 1px solid var(--line-strong);
@@ -1059,6 +1068,20 @@ select.input option {
     var(--bg1);
   box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.7), 0 4px 16px rgba(0, 0, 0, 0.35);
   z-index: 60;
+}
+
+.idmenu::-webkit-scrollbar {
+  width: 8px;
+}
+.idmenu::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 8px;
+}
+.idmenu::-webkit-scrollbar-thumb:hover {
+  background: rgba(59, 142, 255, 0.5);
+}
+.idmenu::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .idsec {
