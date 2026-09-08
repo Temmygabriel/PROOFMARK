@@ -107,26 +107,33 @@ board (`studionet-seed-live.log`, agent `agent-live-1788715641710`, job
 predates the hardening; the hardened contract's pool-ledger money movement is
 re-proven by the 37/37 table above.
 
-## Bradbury status: deploy-only (blocked)
+## Bradbury: hardened Proofmark deployed (2026-09-08)
 
-Scope for Bradbury was deploy-only (no e2e — StudioNet carries the full scenario). A fresh
-Proofmark address on Bradbury **could not be produced**: the source
-(`intelligent-contracts/proofmark.py`, 62,351 bytes) is rejected by the Bradbury RPC with
-`invalid transaction: BlockPubdataLimitReached`. Details recorded honestly:
+Scope for Bradbury is deploy-only (no e2e — StudioNet carries the full scenario). The
+hardened Proofmark is now live on Bradbury from a **minified build** that fits the pubdata
+cap while preserving behavior exactly:
 
-- Largest source ever deployed to Bradbury from this repo: the **Shape A** artifact
-  (~39,869 B → canonical `0x79C1…`, 2026-09-03). The hardened contract is ~62 KB — it
-  exceeds Bradbury's per-transaction pubdata cap. (StudioNet, gasless, accepts it; both
-  hardened 37/37 and the seed ran there.)
-- The single blocked deploy attempt included + reverted, spending ~0.0014 GEN
-  (30.495286 → 30.493878). No further attempts were made per the account-funds constraint.
-- Byte-exact provenance is a hard constraint (`deployed source == audited repo file`), so a
-  comment/whitespace-trimmed variant was **not** used to force the deploy.
-
-**Canonical Bradbury address therefore remains `0x79C15889D5070321176994373C440778a9eC47c1`**
-— the pre-rename Shape A artifact (2026-09-03, read-verified). It is *not* the hardened
-Proofmark bytecode. A Proofmark Bradbury deploy is a known residual pending either a
-smaller artifact or a raised network limit.
+- **Deploy tx:** `0x88a465db5ca32db3c974ff719a6ab0646a9041d991542c43c84ce0ec99656169` — status
+  `ACCEPTED` / result `AGREE`, CLI `✔ Contract deployed successfully` (exit 0).
+- **Contract:** `0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd` — **read-verified** 2026-09-08:
+  `get_pool_info` across `unrated`/`bronze`/`silver`/`gold` all return fresh pools
+  (`balance_atto:0`, `total_shares:0`), confirming the class + ABI decoded and executed.
+- **Artifact:** `build/proofmark-bradbury.py`, **36,902 B** — produced by
+  `e2e/minify_contract.py` from the canonical `intelligent-contracts/proofmark.py`
+  (71,706 B, sha256 `2b679f5292e34bff`). The minifier removes only full-line/trailing
+  comments, blank lines and standalone-string (docstring) expressions and enforces, per
+  run: `ast.parse` clean + **code-token identity** with the source + fixed-point. The build
+  is `genvm-lint` clean (`Proofmark`, 20 methods) and the **55/55 direct tests pass against
+  it** — so it is behaviorally identical to the canonical StudioNet artifact, unlike the
+  old comment-trim-only idea this section previously rejected (a 57.9 KB trim was still over
+  the cap; the docstring-stripping minifier is what fits).
+- **Why the canonical source can't deploy to Bradbury:** the 71.7 KB source exceeds
+  Bradbury's per-tx pubdata cap (`BlockPubdataLimitReached`; largest known-good ~39,869 B).
+  This is a **size** limit, not the v0.6/fee migration — per the consensus-v0.6 doc,
+  Bradbury is not yet on the v0.6 stack.
+- **Historical superseded:** `0x79C15889D5070321176994373C440778a9eC47c1` (Shape A,
+  2026-09-03) and the earlier blocked attempts (incl. one ~0.0014 GEN revert). Total spent
+  on the successful deploy run ~0.0081 GEN (30.493878 → 30.485817).
 
 ## Historical runs (pre-hardening, kept for context)
 
@@ -135,7 +142,7 @@ smaller artifact or a raised network limit.
 | StudioNet | `0x605e5BE4a8013B2B6c70c4BECa3CEbB7BD7918e4` | Shape A hardened | 2026-09-03 | **28/28** e2e (`studionet-e2e.log`) |
 | StudioNet | `0x589472da571Db60151100b153D65a7170367E17D` | **Shape B (pre-rename source)** | 2026-09-06 | **37/37** e2e (`studionet-shapeb-e2e.log`) — the pre-rebrand validation |
 | StudioNet | `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3` | rebranded, pre-H-02/Phase-7b | 2026-09-06 | **37/37** + **10/10** + seeded board (section above) |
-| Bradbury | `0x79C15889D5070321176994373C440778a9eC47c1` | Shape A hardened | 2026-09-03 | deploy-only reads + earlier-generation roundtrip (`bradbury-roundtrip.log`: deposit 1 GEN → pool → withdraw → 0) |
+| Bradbury | `0x79C15889D5070321176994373C440778a9eC47c1` | Shape A hardened (superseded by `0xA2aA…`, 2026-09-08) | 2026-09-03 | deploy-only reads + earlier-generation roundtrip (`bradbury-roundtrip.log`: deposit 1 GEN → pool → withdraw → 0) |
 
 Do **not** use the 2026-09-02 generation (`0xED90…` StudioNet, `0xcBF4…` Bradbury) — it runs
 the unpatched source.
@@ -147,11 +154,14 @@ the unpatched source.
    "recipient wallet actually rose" assertion can only be a wallet-credit check on a
    balance-enforcing network. The pool-ledger conservation half — deposit credits,
    payout debits **exactly** the coverage, exposure releases — is proven live by the
-   37/37 table above. A Bradbury value run would close Mode B, but Bradbury cannot
-   host the hardened 62 KB artifact (`BlockPubdataLimitReached`, above) and carries
-   scarce testnet funds; it stays a documented residual.
-2. **Bradbury Proofmark fresh deploy** — blocked by `BlockPubdataLimitReached` on the
-   62,351-byte source; canonical Bradbury is the pre-rename Shape A artifact. See above.
+   37/37 table above. The hardened Proofmark is now on Bradbury (`0xA2aA…`, minified
+   build) which *would* host a value run, but Bradbury carries scarce testnet funds and
+   a value run needs funding ~43 GEN across roles; it stays a documented residual unless
+   the user opts to fund it.
+2. **(Resolved 2026-09-08)** Bradbury Proofmark fresh deploy — was blocked by
+   `BlockPubdataLimitReached` on the 71.7 KB source; closed by the minified build
+   `build/proofmark-bradbury.py` (36,902 B) → hardened Proofmark live at
+   `0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`. See the Bradbury section above.
 3. **Live judged (V3) claim** — skipped: the evidence gateway `https://w3s.link/ipfs/`
    does not resolve the pinned CIDs from this network (gateway migration: 403/429/504;
    alternate gateways unreachable). The judged bond path (incl. the H-02 two-phase

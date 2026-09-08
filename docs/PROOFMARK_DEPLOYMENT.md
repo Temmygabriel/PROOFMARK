@@ -8,7 +8,7 @@ deployment actually succeeded.
 | Network | Chain ID | Contract address | Deployed | E2E verified |
 |---------|----------|------------------|----------|--------------|
 | **StudioNet** | 61999 | **`0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`** | 2026-09-08 | ✅ **37/37 steps** (on `0x1FcE88…`, same hardened artifact) + **seeded live board** on this address — see [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) |
-| Testnet Bradbury | 4221 | `0x79C15889D5070321176994373C440778a9eC47c1` | 2026-09-03 | deploy-only read-verified — **pre-rename Shape A artifact** (see note) |
+| Testnet Bradbury | 4221 | **`0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`** | 2026-09-08 | deploy-only read-verified — **hardened Proofmark** from a minified build (see note) |
 
 > The **canonical** StudioNet address above is the **Phase-7b hardened** Proofmark
 > contract — deployed 2026-09-08 from `intelligent-contracts/proofmark.py`
@@ -19,11 +19,20 @@ deployment actually succeeded.
 > and this **seeded live board** (`0x850F773B…`, `e2e/results/seed-live-hardened.log`).
 > Full evidence in [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md).
 >
-> **Bradbury note:** a fresh Proofmark deploy to Bradbury is **blocked** — the 62,351-byte
-> source exceeds Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest
-> known-good deploy was the ~39,869-byte Shape A artifact). The address above therefore still
-> runs the pre-rename Shape A bytecode from 2026-09-03 and is kept as the canonical Bradbury
-> address only for that reason. See the evidence doc for the full honest residual.
+> **Bradbury note (resolved 2026-09-08):** the canonical `proofmark.py` (71.7 KB) exceeds
+> Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest known-good
+> ~39,869 B), which long blocked a fresh deploy. The hardened Proofmark is now live on
+> Bradbury from a **minified build** — `build/proofmark-bradbury.py`, **36,902 B** (strips
+> only full-line comments / trailing comments / blank lines / docstrings, never any code or
+> string-literal byte). Equivalence is machine-checked by `e2e/minify_contract.py`
+> (code-token identity + ast.parse + fixed-point gates), `genvm-lint check` is clean
+> (`Proofmark`, 20 methods), and the **55/55 direct tests pass against the build** — so the
+> Bradbury bytecode is behaviorally identical to the canonical StudioNet artifact
+> (`0x850F773B…`, source sha256 `2b679f5292e34bff`). The old pre-rename Shape A deploy
+> `0x79C15889D5070321176994373C440778a9eC47c1` (2026-09-03) is superseded; the fresh
+> deploy is **`0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`** (tx
+> `0x88a465db5ca32db3c974ff719a6ab0646a9041d991542c43c84ce0ec99656169`, `ACCEPTED`/`AGREE`,
+> read-verified `get_pool_info` across tiers).
 
 - Deploy account (`default`): `0xa881365a99d77be904e414ae610e22938bb0466d`
 - The hardened **37-step run** exercised register, LP deposit, quoting, 3× payable
@@ -44,7 +53,7 @@ deployment actually succeeded.
 
 - StudioNet: `https://explorer-studio.genlayer.com/address/0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
 - Bradbury:
-  `https://explorer-bradbury.genlayer.com/address/0x79C15889D5070321176994373C440778a9eC47c1`
+  `https://explorer-bradbury.genlayer.com/address/0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`
 
 ## Frontend environment variables
 
@@ -58,11 +67,10 @@ NEXT_PUBLIC_PROOFMARK_NETWORK=studionet
 ```
 
 If you'd rather run the frontend against **Bradbury** (no rate limits), you can swap in its
-deployment — but note the Bradbury address currently runs the pre-rename Shape A artifact,
-not the hardened Proofmark bytecode (see the note above):
+deployment — it now runs the **hardened Proofmark** (minified build, see the note above):
 
 ```env
-NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x79C15889D5070321176994373C440778a9eC47c1
+NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd
 NEXT_PUBLIC_PROOFMARK_NETWORK=testnet-bradbury
 ```
 
@@ -81,13 +89,21 @@ genlayer network set studionet            # gasless, but rate-limited
 genlayer network set testnet-bradbury     # needs GEN in the account
 
 # 2. Deploy from the repo root
+#    StudioNet: the canonical source
 genlayer deploy --contract intelligent-contracts/proofmark.py
+#    Bradbury:  the minified build (canonical source exceeds the pubdata cap)
+genlayer deploy --contract build/proofmark-bradbury.py
 
 # 3. Record the returned Contract Address + Transaction Hash
 ```
 
 StudioNet is gasless (0 GEN balance is fine). Bradbury needs GEN — claim from
 the faucet if the account is empty: https://testnet-faucet.genlayer.foundation/
+
+To rebuild the minified Bradbury artifact from the canonical source:
+`python e2e/minify_contract.py intelligent-contracts/proofmark.py build/proofmark-bradbury.py`
+(the script enforces code-token equivalence; re-run `genvm-lint check` + the
+direct suite against the build before any re-deploy).
 
 ## How to verify a deployment (do not skip)
 

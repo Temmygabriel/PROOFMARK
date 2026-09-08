@@ -17,6 +17,23 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **Bradbury: hardened Proofmark deployed (2026-09-08)** — the long-standing Bradbury
+  residual is closed. The canonical `proofmark.py` (71,706 B) exceeds Bradbury's per-tx
+  pubdata cap (`BlockPubdataLimitReached` — a **size** limit; confirmed NOT the v0.6/fee
+  migration, which per the migration doc Bradbury is not yet on). Built a **minified
+  artifact** `build/proofmark-bradbury.py` (**36,902 B**, vs ~39,869 B largest known-good)
+  with `e2e/minify_contract.py` — removes only full-line/trailing comments, blank lines and
+  standalone-string (docstring) expressions; leaves every code byte + string-literal byte
+  untouched. The minifier self-verifies per run: `ast.parse` clean + **code-token identity**
+  with the source + fixed-point. The build is `genvm-lint` clean (`Proofmark`, 20 methods)
+  and the **55/55 direct tests pass against it** (canonical suite still 55/55 too). Deployed
+  2026-09-08 to Bradbury: **`0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`**
+  (tx `0x88a465db5ca32db3c974ff719a6ab0646a9041d991542c43c84ce0ec99656169`,
+  `ACCEPTED`/`AGREE`, exit 0), read-verified `get_pool_info` 4 tiers = fresh zeros. The old
+  Shape A canonical `0x79C15889D5070321176994373C440778a9eC47c1` (2026-09-03) is superseded.
+  Note: an earlier deploy attempt was interrupted by a truncated pipe (`| head` SIGPIPE) but
+  still sent a tx (~0.004 GEN, outcome unrecorded — a possible orphan contract with no
+  funds); the clean run cost ~0.004 GEN (total ~0.0081 GEN, 30.493878 → 30.485817).
 - **Frontend fixes while filming (2026-09-08, commits `59691aa` + next):** the live
   dashboard surfaced two issues worth recording. (a) `register` (and any write) could
   report "Timed out waiting … FINALIZED (current status: 5)" even after success — the
