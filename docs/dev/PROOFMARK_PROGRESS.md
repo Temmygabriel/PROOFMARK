@@ -49,6 +49,16 @@ Phase state (newest first):
   stack lives on studio-dev (61997) and may reset; stable studionet (61999) must not
   point at the preview RPC. **Vercel env flip to `0x850F…` remains the only manual
   step before filming.**
+  (4) **Vercel build fix + logo pack (2026-09-08, commit `b17cc4f`).** Vercel's
+  `next build` failed production on a latent type error the local esbuild gate can't
+  see (`page.tsx:1322` — a still-`pending` two-phase claim could be pushed onto the
+  verdict feed; type narrowed to `upheld | rejected`). Fixed, then **type-checked
+  locally with `npx tsc --noEmit`** (clean) before pushing — this is now the gate
+  ahead of any Vercel build. Branding: official logo set authored from the in-app
+  `ProofmarkLogo` geometry under `branding/` at the project root (local, not in this
+  repo): light/dark mark, single-tone badge, app icon, two wordmark lockups (SVG +
+  PNG rasterized via `@resvg/resvg-js`). Submission §01 logo blank now points at
+  `branding/proofmark-mark-1024.png`.
 - **Phase 7b (adversarial contract re-audit + hardening) — DONE + LIVE-PROVEN (2026-09-08):**
   the adversarial audit closed three reviewer-pickable flaws in `proofmark.py` (all
   committed with this entry):
