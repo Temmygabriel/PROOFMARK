@@ -102,12 +102,22 @@ async function write(
     status: TransactionStatus.FINALIZED,
   });
 
-  if (receipt.txExecutionResultName === ExecutionResult.FINISHED_WITH_ERROR) {
-    // Lifecycle status (FINALIZED) is not proof of success -- see
-    // genlayer-cli.md. Surface the real failure instead of pretending it
-    // worked.
+  // Positive success check (H-04): FINALIZED/ACCEPTED is a *lifecycle* state,
+  // not proof of execution success -- a reverted call still finalizes. Success
+  // requires the execution result to be FINISHED_WITH_RETURN, and an
+  // UNDETERMINED / validator-or-leader-timeout outcome must be surfaced as
+  // "no result to assume", never as "done".
+  const execName = receipt.txExecutionResultName;
+  const statusName = receipt.statusName;
+  if (execName !== ExecutionResult.FINISHED_WITH_RETURN) {
+    const undetermined =
+      statusName === TransactionStatus.UNDETERMINED ||
+      statusName === TransactionStatus.LEADER_TIMEOUT ||
+      statusName === TransactionStatus.VALIDATORS_TIMEOUT;
     throw new Error(
-      `Transaction finalized but execution failed. Check the receipt for ${hash} for details.`
+      undetermined
+        ? `Consensus did not complete (${statusName}); no contract result should be assumed for ${hash}.`
+        : `Transaction did not succeed (${statusName} / ${execName ?? "no execution result"}). Check the receipt for ${hash}.`
     );
   }
 
@@ -178,8 +188,25 @@ export function expirePolicy(account: GenAccount, jobId: string) {
   return write(account, "expire_policy", [jobId]);
 }
 
+/** Agent accepts a pending policy, activating it (and starting the clock). */
+export function acceptJob(account: GenAccount, jobId: string) {
+  return write(account, "accept_job", [jobId]);
+}
+
+/** Agent rejects a pending policy; the buyer's premium is refunded. */
+export function rejectJob(account: GenAccount, jobId: string) {
+  return write(account, "reject_job", [jobId]);
+}
+
+/** Buyer cancels a pending policy before the agent accepts it. */
+export function cancelPendingPolicy(account: GenAccount, jobId: string) {
+  return write(account, "cancel_pending_policy", [jobId]);
+}
+
 export function getPolicy(jobId: string) {
   return read<{
+    job_id: string;
+    display_job_id: string;
     buyer: string;
     agent_id: string;
     coverage_atto: number | bigint;
@@ -187,7 +214,11 @@ export function getPolicy(jobId: string) {
     deliverable_hash: string;
     deadline_iso: string;
     pool_tier: Tier;
-    status: "active" | "claimed" | "expired";
+    // M-01: the contract also has "pending" (a policy issued but not yet
+    // accepted by the agent) -- the frontend type must not drop states the
+    // contract can actually return.
+    status: "pending" | "active" | "claimed" | "expired";
+    agent_accepted: boolean;
   }>("get_policy", [jobId]);
 }
 
@@ -224,8 +255,27 @@ export function fileClaim(account: GenAccount, jobId: string) {
   return write(account, "file_claim", [jobId], VERDICT_BOND_ATTO);
 }
 
+/**
+ * Two-phase claims (FIX-19 / H-02): `fileClaim` only escrows the verdict bond
+ * and records the claim as pending -- the GenLayer consensus judgement runs in
+ * the non-payable `judgeClaim`, so a failed/aborted judgement can never burn the
+ * buyer's bond. Any caller may trigger it once the deliverable is submitted.
+ */
+export function judgeClaim(account: GenAccount, jobId: string) {
+  return write(account, "judge_claim", [jobId]);
+}
+
+/** Buyer-only recovery route: refunds the escrowed bond and returns the policy
+ * to active, letting the buyer file again. */
+export function rescindPendingClaim(account: GenAccount, jobId: string) {
+  return write(account, "rescind_pending_claim", [jobId]);
+}
+
 export function getClaimStatus(jobId: string) {
-  return read<"unresolved" | "upheld" | "rejected">("get_claim_status", [jobId]);
+  return read<"unresolved" | "pending" | "upheld" | "rejected">(
+    "get_claim_status",
+    [jobId]
+  );
 }
 
 // ---------------------------------------------------------------------------

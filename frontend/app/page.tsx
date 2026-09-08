@@ -18,6 +18,7 @@ import {
   getPoolInfo,
   getLpPosition,
   fileClaim,
+  judgeClaim,
   getClaimStatus,
   parseGenToAtto,
   formatAttoToGen,
@@ -73,19 +74,19 @@ type FeedEntry = {
 // localStorage), replay the REAL seed transactions from e2e/seed-live.js into
 // the feed so "Recent activity" matches the funded board a first-time reviewer
 // sees. Every entry below is a genuine finalized write on that contract --
-// register agent-live-1788715641710, the four LP deposits, the 1 GEN cover on
-// job-live-1788715641710 -- ids/amounts identical to the on-chain txs, stamped
+// register agent-live-1788864539810, the four LP deposits, the 1 GEN cover on
+// job-live-1788864539810 -- ids/amounts identical to the on-chain txs, stamped
 // with the actual seed-run time (the ids embed Date.now()). Any other network
 // or address keeps the feed local-only.
-const SEEDED_CONTRACT = "0x1c91f37f3ec428ecbf4b0a5698bfff0c9d85f0c3";
-const SEED_TS = 1788715641710; // Date.now() when seed-live.js ran (2026-09-06)
+const SEEDED_CONTRACT = "0x850f773bf5bb2bddb788896152c0a3c7c1c212b6";
+const SEED_TS = 1788864539810; // Date.now() when seed-live.js ran (2026-09-08)
 const SEED_ACTIVITY: FeedEntry[] = [
-  { action: "issue", jobId: "job-live-1788715641710", agentId: "agent-live-1788715641710", amount: "0.06 GEN", tier: "Unrated", ts: SEED_TS },
+  { action: "issue", jobId: "job-live-1788864539810", agentId: "agent-live-1788864539810", amount: "0.06 GEN", tier: "Unrated", ts: SEED_TS },
   { action: "deposit", amount: "2 GEN", tier: "Gold", ts: SEED_TS },
   { action: "deposit", amount: "3 GEN", tier: "Silver", ts: SEED_TS },
   { action: "deposit", amount: "5 GEN", tier: "Bronze", ts: SEED_TS },
   { action: "deposit", amount: "10 GEN", tier: "Unrated", ts: SEED_TS },
-  { action: "register", agentId: "agent-live-1788715641710", ts: SEED_TS },
+  { action: "register", agentId: "agent-live-1788864539810", ts: SEED_TS },
 ];
 
 function readFeed(): FeedEntry[] {
@@ -291,11 +292,11 @@ function ConformanceStamp({
   amount?: string;
   note?: string;
 }) {
-  if (v === "unresolved") {
+  if (v === "unresolved" || v === "pending") {
     return (
       <div className="verdict-card pending">
         <div className="stamp pending">
-          <div className="stamp-text">Pending</div>
+          <div className="stamp-text">{v === "pending" ? "In judgement" : "Pending"}</div>
         </div>
         <div className="verdict-info">
           <div className="verdict-job mono">{jobId}</div>
@@ -424,10 +425,13 @@ type PolicyInfo = {
   deliverable_hash: string;
   deadline_iso: string;
   pool_tier: Tier;
-  status: "active" | "claimed" | "expired";
+  // M-01: the contract also returns "pending" (policy issued, agent has not
+  // accepted yet) -- the frontend type must not drop states the contract can
+  // actually return.
+  status: "pending" | "active" | "claimed" | "expired";
 };
 
-type Verdict = "unresolved" | "upheld" | "rejected";
+type Verdict = "unresolved" | "pending" | "upheld" | "rejected";
 
 type PolicyDisplayState = {
   label: string;
@@ -436,13 +440,20 @@ type PolicyDisplayState = {
 };
 
 /** Turn raw policy fields into a plain-language statement of where the job
- * stands. The contract only returns "active" until a claim resolves, so the
- * real signal is deliverable_hash + deadline vs now: an empty deliverable
- * past the deadline is an automatic breach the buyer can claim with no risk. */
+ * stands. "active" is only set once the agent accepts; a "pending" policy is
+ * still awaiting acceptance. The real claim signal is deliverable_hash +
+ * deadline vs now: an empty deliverable past the deadline is an automatic
+ * breach the buyer can claim with no risk. */
 function derivePolicyState(p: PolicyInfo): PolicyDisplayState {
   const hasDeliv = (p.deliverable_hash ?? "").trim().length > 0;
   const dl = Date.parse(p.deadline_iso);
   const pastDeadline = Number.isNaN(dl) ? false : dl <= Date.now();
+  if (p.status === "pending")
+    return {
+      label: "Pending acceptance",
+      cls: "awaiting",
+      action: "The insured agent hasn't accepted this job yet — premium is escrowed until they do.",
+    };
   if (p.status === "claimed")
     return {
       label: "Coverage paid",
@@ -1220,18 +1231,23 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
     try {
       const addr = await ensureWallet();
       const { hash } = await fileClaim(addr, cJobId);
-      setCSince(null);
-      setCN({ status: "ok", title: "Verdict requested", detail: `tx ${hash}` });
+      // Two-phase claim (FIX-19/H-02): file_claim only escrows the bond and
+      // records the claim as `pending` -- the consensus judgement runs in the
+      // separate, non-payable judge_claim so a failed judgement can never burn
+      // the bond. With a deliverable present the claim is still pending after
+      // file_claim, so trigger judge_claim before reading the final verdict;
+      // with no deliverable (auto-breach) file_claim already resolved it.
       pushFeed({ action: "claim", jobId: cJobId.trim() });
-      try {
-        const v = (await getClaimStatus(cJobId)) as Verdict;
-        setVerdict(v);
-        setCN(idleNotice); // the verdict stamp below says it all
-        if (v !== "unresolved")
-          pushFeed({ action: "verdict", jobId: cJobId.trim(), verdict: v });
-      } catch {
-        /* verdict read is a bonus; the tx result already matters */
+      let v = (await getClaimStatus(cJobId)) as Verdict;
+      if (v === "pending") {
+        await judgeClaim(addr, cJobId);
+        v = (await getClaimStatus(cJobId)) as Verdict;
       }
+      setCSince(null);
+      setVerdict(v);
+      setCN(idleNotice); // the verdict stamp below says it all
+      if (v !== "unresolved")
+        pushFeed({ action: "verdict", jobId: cJobId.trim(), verdict: v });
     } catch (e: any) {
       setCSince(null);
       setCN({ status: "error", title: "Request failed", detail: errText(e) });
@@ -1253,6 +1269,7 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
   const verdictText: Record<Verdict, string> = {
     upheld: "Coverage paid out — the deliverable failed conformance.",
     rejected: "Delivery conformed — the claim was dismissed, bond forfeited.",
+    pending: "Judgement in progress — the bond is escrowed pending validator consensus.",
     unresolved: "No verdict yet — validators are still scoring the delivery.",
   };
 
