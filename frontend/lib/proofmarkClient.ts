@@ -2,7 +2,7 @@
 
 import { createClient } from "genlayer-js";
 import { studionet, testnetBradbury } from "genlayer-js/chains";
-import { TransactionStatus, ExecutionResult } from "genlayer-js/types";
+import { TransactionStatus } from "genlayer-js/types";
 import type { GenAccount } from "./identity";
 
 // ---------------------------------------------------------------------------
@@ -80,6 +80,70 @@ async function read<T = any>(functionName: string, args: any[] = []): Promise<T>
   }) as Promise<T>;
 }
 
+/**
+ * Decides whether a finalized write actually executed successfully.
+ *
+ * On StudioNet a reverted call STILL finalizes FINALIZED/MAJORITY_AGREE, and the
+ * receipt exposes no `txExecutionResultName`/`statusName` (reading them yields
+ * undefined -- a false "Transaction did not succeed" on EVERY successful write).
+ * The truth is per-validator (validated against ground-truth receipts):
+ * `consensus_data.validators[]`, each with execution_result + vote; only
+ * validators that voted **agree** decide the committed outcome -- reverted <=>
+ * an agreeing validator's execution_result is "ERROR". Idle validators routinely
+ * report execution_result "ERROR" ("validator execution cancelled after quorum")
+ * and must be ignored; scanning any-ERROR mislabels successful submits as
+ * reverted. Bradbury carries no consensus_data: numeric txExecutionResult tells
+ * all (1=FINISHED_WITH_RETURN success, 2=FINISHED_WITH_ERROR revert, 0=NOT_VOTED).
+ * Mirrors the validated classifier in e2e/run.js.
+ */
+function classifyReceipt(receipt: any): {
+  ok: boolean;
+  reverted: boolean;
+  undetermined: boolean;
+  label: string;
+} {
+  let cd = receipt?.consensus_data;
+  if (typeof cd === "string") {
+    try { cd = JSON.parse(cd); } catch { cd = null; }
+  }
+  const raw = Array.isArray(cd?.validators)
+    ? cd.validators
+    : Array.isArray(cd?.leader_receipt)
+      ? cd.leader_receipt
+      : [];
+  const seen = raw.map((e: any) => ({
+    result: e?.execution_result ?? e?.genvm_result?.execution_result ?? null,
+    vote: e?.vote ?? null,
+    mode: e?.mode ?? null,
+  }));
+  const agreeing = seen.filter((e: any) => e?.vote === "agree");
+  const execNum = receipt?.txExecutionResult;
+  const execNm = String(receipt?.txExecutionResultName ?? "");
+  const stName = String(receipt?.statusName ?? receipt?.status_name ?? "");
+  const rName = String(receipt?.resultName ?? receipt?.result_name ?? "");
+  const leaderErr = seen.some((e: any) => e?.mode === "leader" && e?.result === "ERROR");
+
+  if (agreeing.length > 0) {
+    const reverted = agreeing.some((e: any) => e?.result === "ERROR");
+    return {
+      ok: !reverted,
+      reverted,
+      undetermined: false,
+      label: `AGREE[${agreeing.map((e: any) => e?.result).join(",")}]`,
+    };
+  }
+  if (execNum === 2 || /FINISHED_WITH_ERROR/.test(execNm) || leaderErr) {
+    return { ok: false, reverted: true, undetermined: false, label: "FINISHED_WITH_ERROR" };
+  }
+  if (execNum === 1 && /AGREE/.test(rName)) {
+    return { ok: true, reverted: false, undetermined: false, label: rName };
+  }
+  if (/LEADER_TIMEOUT|TIMEOUT/.test(stName) || /IDLE|NOT_VOTED/.test(rName) || execNum === 0) {
+    return { ok: false, reverted: false, undetermined: true, label: `UNDETERMINED(${stName}/${rName})` };
+  }
+  return { ok: !leaderErr, reverted: leaderErr, undetermined: false, label: stName || rName };
+}
+
 async function write(
   account: GenAccount,
   functionName: string,
@@ -110,21 +174,20 @@ async function write(
   });
 
   // Positive success check (H-04): FINALIZED/ACCEPTED is a *lifecycle* state,
-  // not proof of execution success -- a reverted call still finalizes. Success
-  // requires the execution result to be FINISHED_WITH_RETURN, and an
-  // UNDETERMINED / validator-or-leader-timeout outcome must be surfaced as
-  // "no result to assume", never as "done".
-  const execName = receipt.txExecutionResultName;
-  const statusName = receipt.statusName;
-  if (execName !== ExecutionResult.FINISHED_WITH_RETURN) {
-    const undetermined =
-      statusName === TransactionStatus.UNDETERMINED ||
-      statusName === TransactionStatus.LEADER_TIMEOUT ||
-      statusName === TransactionStatus.VALIDATORS_TIMEOUT;
+  // not proof of execution success -- a reverted call still finalizes, and on
+  // StudioNet the receipt carries no txExecutionResultName at all. classifyReceipt
+  // decides from the agreeing validators' execution_result (see above). Success is
+  // only claimed when positively proven; an UNDETERMINED / validator-or-leader
+  // timeout outcome is surfaced as "no result to assume", never as "done".
+  const verdict = classifyReceipt(receipt);
+  if (verdict.undetermined) {
     throw new Error(
-      undetermined
-        ? `Consensus did not complete (${statusName}); no contract result should be assumed for ${hash}.`
-        : `Transaction did not succeed (${statusName} / ${execName ?? "no execution result"}). Check the receipt for ${hash}.`
+      `Consensus did not complete (${verdict.label}); no contract result should be assumed for ${hash}.`
+    );
+  }
+  if (verdict.reverted) {
+    throw new Error(
+      `Transaction did not succeed (${verdict.label}). Check the receipt for ${hash}.`
     );
   }
 

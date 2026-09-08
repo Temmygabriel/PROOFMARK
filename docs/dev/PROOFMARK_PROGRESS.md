@@ -26,6 +26,14 @@ Phase state (newest first):
   identity dropdown `.idmenu` has no height cap and the sticky topbar pins it below the
   viewport, so its last section (Danger zone → Generate new identity) was unreachable on
   short screens; now capped to the viewport with internal `overflow-y: auto`.
+  (c) **StudioNet receipts carry no `txExecutionResultName`/`statusName`** — the H-04
+  positive check read them as undefined and threw a false "Transaction did not succeed"
+  on EVERY successful write (seen live: a `register` for `agent-fa34` that finalized
+  MAJORITY_AGREE with 2 agreeing validators = SUCCESS). Replaced the check with
+  `classifyReceipt`, the per-validator `consensus_data.validators[]` classifier
+  (agree/ERROR rule, idle-ERROR ignored) mirrored from `e2e/run.js`; verified against
+  two real finalized register receipts (both classified ok) + synthetic revert and
+  undetermined cases. Commits: `59691aa`, `7cfd23b`, this one.
 - **Submission wrap-up (2026-09-08)** — three finishing moves after the Phase-7b live
   proof, all on the canonical hardened `0x850F…`:
   (1) **A real payout planted on the canonical board.** The seeded job
