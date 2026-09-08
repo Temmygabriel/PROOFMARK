@@ -21,7 +21,7 @@ Phase state (newest first):
   residual is closed. The canonical `proofmark.py` (71,706 B) exceeds Bradbury's per-tx
   pubdata cap (`BlockPubdataLimitReached` — a **size** limit; confirmed NOT the v0.6/fee
   migration, which per the migration doc Bradbury is not yet on). Built a **minified
-  artifact** `build/proofmark-bradbury.py` (**36,902 B**, vs ~39,869 B largest known-good)
+  artifact** `intelligent-contracts/proofmark-bradbury.py` (**36,902 B**, vs ~39,869 B largest known-good)
   with `e2e/minify_contract.py` — removes only full-line/trailing comments, blank lines and
   standalone-string (docstring) expressions; leaves every code byte + string-literal byte
   untouched. The minifier self-verifies per run: `ast.parse` clean + **code-token identity**

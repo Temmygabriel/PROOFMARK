@@ -22,7 +22,7 @@ deployment actually succeeded.
 > **Bradbury note (resolved 2026-09-08):** the canonical `proofmark.py` (71.7 KB) exceeds
 > Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest known-good
 > ~39,869 B), which long blocked a fresh deploy. The hardened Proofmark is now live on
-> Bradbury from a **minified build** — `build/proofmark-bradbury.py`, **36,902 B** (strips
+> Bradbury from a **minified build** — `intelligent-contracts/proofmark-bradbury.py`, **36,902 B** (strips
 > only full-line comments / trailing comments / blank lines / docstrings, never any code or
 > string-literal byte). Equivalence is machine-checked by `e2e/minify_contract.py`
 > (code-token identity + ast.parse + fixed-point gates), `genvm-lint check` is clean
@@ -92,7 +92,7 @@ genlayer network set testnet-bradbury     # needs GEN in the account
 #    StudioNet: the canonical source
 genlayer deploy --contract intelligent-contracts/proofmark.py
 #    Bradbury:  the minified build (canonical source exceeds the pubdata cap)
-genlayer deploy --contract build/proofmark-bradbury.py
+genlayer deploy --contract intelligent-contracts/proofmark-bradbury.py
 
 # 3. Record the returned Contract Address + Transaction Hash
 ```
@@ -101,7 +101,7 @@ StudioNet is gasless (0 GEN balance is fine). Bradbury needs GEN — claim from
 the faucet if the account is empty: https://testnet-faucet.genlayer.foundation/
 
 To rebuild the minified Bradbury artifact from the canonical source:
-`python e2e/minify_contract.py intelligent-contracts/proofmark.py build/proofmark-bradbury.py`
+`python e2e/minify_contract.py intelligent-contracts/proofmark.py intelligent-contracts/proofmark-bradbury.py`
 (the script enforces code-token equivalence; re-run `genvm-lint check` + the
 direct suite against the build before any re-deploy).
 

@@ -38,7 +38,7 @@ const NETS = {
   },
   bradbury: {
     label: "Bradbury",
-    address: "0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd", // Hardened Proofmark, DEPLOYED 2026-09-08 from build/proofmark-bradbury.py (36,902 B minified build -- canonical 71.7 KB source exceeds Bradbury's BlockPubdataLimitReached pubdata cap). tx 0x88a465db5ca32db3c974ff719a6ab0646a9041d991542c43c84ce0ec99656169. Read-verified get_pool_info 4 tiers = 0. Minifier + equivalence gates: e2e/minify_contract.py; genvm-lint clean; 55/55 direct tests green against the build.
+    address: "0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd", // Hardened Proofmark, DEPLOYED 2026-09-08 from intelligent-contracts/proofmark-bradbury.py (36,902 B minified build -- canonical 71.7 KB source exceeds Bradbury's BlockPubdataLimitReached pubdata cap). tx 0x88a465db5ca32db3c974ff719a6ab0646a9041d991542c43c84ce0ec99656169. Read-verified get_pool_info 4 tiers = 0. Minifier + equivalence gates: e2e/minify_contract.py; genvm-lint clean; 55/55 direct tests green against the build.
     chain: testnetBradbury,
     needsFunding: true,
   },

@@ -118,7 +118,7 @@ cap while preserving behavior exactly:
 - **Contract:** `0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd` — **read-verified** 2026-09-08:
   `get_pool_info` across `unrated`/`bronze`/`silver`/`gold` all return fresh pools
   (`balance_atto:0`, `total_shares:0`), confirming the class + ABI decoded and executed.
-- **Artifact:** `build/proofmark-bradbury.py`, **36,902 B** — produced by
+- **Artifact:** `intelligent-contracts/proofmark-bradbury.py`, **36,902 B** — produced by
   `e2e/minify_contract.py` from the canonical `intelligent-contracts/proofmark.py`
   (71,706 B, sha256 `2b679f5292e34bff`). The minifier removes only full-line/trailing
   comments, blank lines and standalone-string (docstring) expressions and enforces, per
@@ -160,7 +160,7 @@ the unpatched source.
    the user opts to fund it.
 2. **(Resolved 2026-09-08)** Bradbury Proofmark fresh deploy — was blocked by
    `BlockPubdataLimitReached` on the 71.7 KB source; closed by the minified build
-   `build/proofmark-bradbury.py` (36,902 B) → hardened Proofmark live at
+   `intelligent-contracts/proofmark-bradbury.py` (36,902 B) → hardened Proofmark live at
    `0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`. See the Bradbury section above.
 3. **Live judged (V3) claim** — skipped: the evidence gateway `https://w3s.link/ipfs/`
    does not resolve the pinned CIDs from this network (gateway migration: 403/429/504;
