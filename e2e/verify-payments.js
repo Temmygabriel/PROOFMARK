@@ -34,13 +34,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Helpers
 // ---------------------------------------------------------------------------
 async function getBalance(client, address) {
-  try {
-    const bal = await client.getBalance({ address });
-    return typeof bal === "bigint" ? bal : BigInt(bal);
-  } catch (e) {
-    console.error(`  getBalance failed for ${address}:`, e?.message);
-    return null;
+  // StudioNet RPC is flaky (HTML-page responses, resets) -- retry before
+  // giving up so a transient blip never blanks a money-outcome check.
+  for (let i = 0; i < 6; i++) {
+    try {
+      const bal = await client.getBalance({ address });
+      return typeof bal === "bigint" ? bal : BigInt(bal);
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (!/fetch failed|ECONNRESET|socket|not valid JSON|Unexpected token|<!DOCTYPE/i.test(msg)) {
+        throw e;
+      }
+      if (i === 5) {
+        console.error(`  getBalance failed for ${address} after 6 attempts:`, msg);
+        return null;
+      }
+      await new Promise((r) => setTimeout(r, 900 * (i + 1)));
+    }
   }
+  return null;
 }
 
 function fmtGen(atto) {

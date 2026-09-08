@@ -32,7 +32,7 @@ const CONTRACT_PATH = path.join(__dirname, "..", "intelligent-contracts", "proof
 const NETS = {
   studionet: {
     label: "StudioNet",
-    address: "0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3", // Proofmark redeploy (2026-09-06)
+    address: "0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6", // Proofmark Phase-7b hardened canonical, seeded live board (2026-09-08); e2e 37/37 on 0x1FcE88 (same artifact, pool drained)
     chain: studionet,
     needsFunding: false,
   },
@@ -101,7 +101,7 @@ async function withRetry(fn, { retries = 6, base = 900, label = "" } = {}) {
       lastErr = e;
       const msg = String(e?.message || e);
       const transient =
-        /fetch failed|ECONNRESET|invalid session|socket|network|timeout|429|rate/i.test(msg);
+        /fetch failed|ECONNRESET|invalid session|socket|network|timeout|429|rate|not valid JSON|Unexpected token|<!DOCTYPE/i.test(msg);
       if (!transient) throw e; // real failure (e.g. consensus revert) -- don't retry
       if (i < retries - 1) {
         await sleep(base * (i + 1));
@@ -181,7 +181,7 @@ export function makeNetwork(netName) {
       try {
         tx = await client.getTransaction({ hash });
       } catch (e) {
-        if (!/fetch failed|ECONNRESET|socket/i.test(String(e?.message || e))) throw e;
+        if (!/fetch failed|ECONNRESET|socket|not valid JSON|Unexpected token|<!DOCTYPE/i.test(String(e?.message || e))) throw e;
         await sleep(1500);
         continue;
       }
@@ -553,7 +553,10 @@ const network = argvFlag("--network") || "studionet";
 async function deployTo(netName) {
   const net = NETS[netName];
   const out = await runGenlayer(["network", "set", netName === "bradbury" ? "testnet-bradbury" : "studionet"]);
-  const deployOut = await runGenlayer(["deploy", "--contract", CONTRACT_PATH]);
+  // CONTRACT_PATH lives under a directory with spaces ("GEN Layer projects");
+  // with shell:true the shell re-splits args on spaces, so pass the path as a
+  // single quoted token (JSON.stringify adds the surrounding quotes).
+  const deployOut = await runGenlayer(["deploy", "--contract", JSON.stringify(CONTRACT_PATH)]);
   const m = deployOut.match(/'Contract Address':\s*'(0x[0-9a-fA-F]{40})'/i);
   if (!m) throw new Error(`could not parse contract address from deploy output:\n${deployOut}`);
   const addr = m[1];
