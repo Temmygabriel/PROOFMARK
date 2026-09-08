@@ -75,14 +75,33 @@ Four moving parts in the contract:
   Pending-queue cap ~32 in-flight txs per sender. Throttle + wait for receipts.
 - `gltest` networks are named with underscores: `studionet`, `testnet_bradbury`.
 
+### Consensus v0.6 migration — forward-looking only, no action at submission
+
+Recorded 2026-09-08 per the user. Before any FUTURE deploy study
+https://docs.genlayer.com/developers/consensus-v06-migration ("Test on Studio-dev
+first"): the v0.6 RC stack is on **studio-dev** (`studio-dev.genlayer.com`, RPC
+`https://studio-dev.genlayer.com/api`, chain 61997) and **may reset**; the stable
+**studionet** chain object (61999 — where canonical `0x850F…` lives) must NOT be
+pointed at the preview RPC — chain identity and consensus contract addresses move
+together. On fee-charging networks every deploy/write must carry a quoted
+`FeesDistribution` estimated from a measured `fee-profile.json`; a tx counts as
+success only when status `ACCEPTED`/`FINALIZED` **and** the execution result is
+`FINISHED_WITH_RETURN` (the same accepted-but-error rule this repo hardened for).
+A Studio deployment can be gasless — detect that from the fee estimate, not the
+network name. The user's earlier py-genlayer v0.3.0 / `Depends`-hash header note
+is superseded by this doc for deploy decisions.
+
 ## Deployed contract addresses
 
 **Canonical — Proofmark, Phase-7b HARDENED artifact (`proofmark.py`, `class Proofmark`):**
 - **StudioNet (canonical LIVE — seeded board; `page.tsx` + Vercel env point at this):**
   `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6` (deployed 2026-09-08 via `run.js deploy`).
-  - **Clean seed-live board** (`e2e/results/seed-live-hardened.log`): Unrated 10.0600 /
-    locked 1.0000, Bronze 5, Silver 3, Gold 2; live agent `agent-live-1788864539810`,
-    active job `job-live-1788864539810` (1 GEN cover, ~1h deadline; live wallet in
+  - **Seeded board with a settled payout** (`e2e/results/seed-live-hardened.log` +
+    `plant-payout.log`): the seeded job `job-live-1788864539810` was claimed on
+    2026-09-08 (deterministic auto-breach, no deliverable) and resolved **upheld** —
+    the buyer was paid **exactly 1.000000 GEN** from the Unrated pool, the 2 GEN bond
+    refunded. Board re-read after settlement: Unrated **9.0600 / locked 0.0000**,
+    Bronze 5, Silver 3, Gold 2. Live agent `agent-live-1788864539810` (wallet in
     `e2e/live-keys.json`). Every write finalized success.
 - **StudioNet (e2e evidence — pool intentionally drained by the run):**
   `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` (deployed 2026-09-08, same hardened

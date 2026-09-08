@@ -17,6 +17,38 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **Submission wrap-up (2026-09-08)** — three finishing moves after the Phase-7b live
+  proof, all on the canonical hardened `0x850F…`:
+  (1) **A real payout planted on the canonical board.** The seeded job
+  `job-live-1788864539810`'s deadline passed with nothing delivered and the
+  deterministic auto-breach claim was filed (`e2e/results/plant-claim.js`, keys
+  buyer): claim **upheld**, buyer paid **exactly 1.000000 GEN** from the Unrated
+  pool, 2 GEN bond refunded. Board re-read post-settlement: Unrated **9.0600 /
+  locked 0.0000** (was 10.0600 / 1.0000), Bronze 5 / Silver 3 / Gold 2. Provenance
+  in `e2e/results/plant-payout.log`. This is the "Coverage paid" example the
+  submission's Step 2 points a reviewer at.
+  (2) **UI Accept-job action** so the full reviewer loop is runnable — the hardened
+  contract requires the agent's owner to `accept_job` before a policy is `active`,
+  and the UI never surfaced it. The Coverage job-record card now renders an "Accept
+  job" button when the current identity owns the agent of a `pending` policy;
+  esbuild TSX parse gate clean.
+  (3) **Submission + demo docs reconciled to the verified reality** (project root,
+  outside this repo): `proofmark-submission-note.md` §05 rewritten as titled,
+  reproducible two-window steps (agent window + buyer window — the contract refuses
+  self-insurance), canonical → `0x850F…`, board → the post-claim state; demo
+  run-sheet/captions gained the accept beat and the settled board; this repo's docs
+  (LIVE_EVIDENCE / PROJECT_MEMORY) re-pointed to the settled board. Audit
+  follow-ups: M-05 + L-01 resolved (evidence is reproducible via the committed
+  LIVE_EVIDENCE tx-hash tables + re-verify; CONTRACT.md and `get_claim_status` share
+  the `unresolved/pending/upheld/rejected` vocabulary since H-02); M-07 (ISO parser
+  permissiveness) accepted as a disclosed LOW residual — tightening it would change
+  `proofmark.py` bytes and break byte-exact provenance to the canonical deploy, so it
+  is deliberately unchanged (rationale in the audit doc banner). **Forward-looking
+  only, no action at submission:** consensus v0.6 migration — test on studio-dev
+  first (https://docs.genlayer.com/developers/consensus-v06-migration); the v0.6 RC
+  stack lives on studio-dev (61997) and may reset; stable studionet (61999) must not
+  point at the preview RPC. **Vercel env flip to `0x850F…` remains the only manual
+  step before filming.**
 - **Phase 7b (adversarial contract re-audit + hardening) — DONE + LIVE-PROVEN (2026-09-08):**
   the adversarial audit closed three reviewer-pickable flaws in `proofmark.py` (all
   committed with this entry):

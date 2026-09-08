@@ -12,6 +12,7 @@ import {
   quotePremium,
   issuePolicy,
   submitDeliverable,
+  acceptJob,
   getPolicy,
   deposit,
   withdraw,
@@ -75,12 +76,17 @@ type FeedEntry = {
 // the feed so "Recent activity" matches the funded board a first-time reviewer
 // sees. Every entry below is a genuine finalized write on that contract --
 // register agent-live-1788864539810, the four LP deposits, the 1 GEN cover on
-// job-live-1788864539810 -- ids/amounts identical to the on-chain txs, stamped
-// with the actual seed-run time (the ids embed Date.now()). Any other network
+// job-live-1788864539810, and the planted payout (same job, claimed + upheld
+// 2026-09-08) -- ids/amounts identical to the on-chain txs, stamped with the
+// actual seed-run time (the ids embed Date.now()). Any other network
 // or address keeps the feed local-only.
 const SEEDED_CONTRACT = "0x850f773bf5bb2bddb788896152c0a3c7c1c212b6";
 const SEED_TS = 1788864539810; // Date.now() when seed-live.js ran (2026-09-08)
 const SEED_ACTIVITY: FeedEntry[] = [
+  // Planted 2026-09-08 (same day, after the seed): the seeded job's deadline
+  // passed with nothing delivered; the deterministic auto-breach claim resolved
+  // upheld, so a finished payout now sits on the board (Unrated 9.06, lock 0).
+  { action: "verdict", jobId: "job-live-1788864539810", verdict: "upheld", ts: SEED_TS },
   { action: "issue", jobId: "job-live-1788864539810", agentId: "agent-live-1788864539810", amount: "0.06 GEN", tier: "Unrated", ts: SEED_TS },
   { action: "deposit", amount: "2 GEN", tier: "Gold", ts: SEED_TS },
   { action: "deposit", amount: "3 GEN", tier: "Silver", ts: SEED_TS },
@@ -805,9 +811,12 @@ function PoolsPanel({
 function CoveragePanel({
   ensureWallet,
   onGoPools,
+  identityAddr,
 }: {
   ensureWallet: EnsureWallet;
   onGoPools: () => void;
+  /** Current signer address (lowercased), used to gate agent-only actions. */
+  identityAddr: string | null;
 }) {
   const [jobId, setJobId] = useState("job-001");
   const [covAgentId, setCovAgentId] = useState("agent-alice");
@@ -830,6 +839,31 @@ function CoveragePanel({
   // Verdict read for a looked-up policy, only present once it was claimed.
   const [polClaim, setPolClaim] = useState<Verdict | null>(null);
   const [polN, setPolN] = useState<Notice>(idleNotice);
+  // Agent accept/reject on a pending policy (the agent's own wallet only).
+  const [actN, setActN] = useState<Notice>(idleNotice);
+  // Owner of the looked-up policy's agent — a pending policy only becomes
+  // active when that wallet accepts it, so gate the action on the signer.
+  const [polOwner, setPolOwner] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    if (!pol || pol.status !== "pending") {
+      setPolOwner(null);
+      return;
+    }
+    getProfile(pol.agent_id)
+      .then((p) => {
+        if (alive) setPolOwner(String(p.owner).toLowerCase());
+      })
+      .catch(() => {
+        if (alive) setPolOwner(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [pol]);
+  const isAgentOwner =
+    !!identityAddr && !!polOwner && identityAddr === polOwner;
 
   async function doQuote() {
     setQuote(null);
@@ -951,6 +985,25 @@ function CoveragePanel({
       setPol(null);
       setPolClaim(null);
       setPolN({ status: "error", title: "Lookup failed", detail: errText(e) });
+    }
+  }
+
+  /** Agent-only: bind a pending policy by accepting it (pending -> active).
+   * Only the wallet registered as the policy's agent succeeds; the contract
+   * enforces it, and the notice shows the revert if a wrong wallet tries. */
+  async function doAccept() {
+    setActN({ status: "pending", title: "Accepting job on-chain…" });
+    try {
+      const addr = await ensureWallet();
+      const { hash } = await acceptJob(addr, polJob.trim());
+      setActN({
+        status: "ok",
+        title: "Job accepted",
+        detail: `tx ${hash} — coverage is now live. The clock is running.`,
+      });
+      await doPolicyLookup(); // refresh the card: pending -> Waiting for delivery
+    } catch (e: any) {
+      setActN({ status: "error", title: "Accept failed", detail: errText(e) });
     }
   }
 
@@ -1145,6 +1198,25 @@ function CoveragePanel({
               </div>
               {scoreNote && <p className="score-note">{scoreNote}</p>}
             </div>
+
+            {pol.status === "pending" && isAgentOwner && (
+              <div className="pol-act">
+                <p className="hint" style={{ margin: 0 }}>
+                  You registered this agent. Accept to bind the coverage and start the
+                  clock — the buyer&apos;s premium stays escrowed until then.
+                </p>
+                <div className="btn-row" style={{ marginTop: 10 }}>
+                  <button
+                    className="btn btn-primary"
+                    disabled={actN.status === "pending"}
+                    onClick={doAccept}
+                  >
+                    {actN.status === "pending" ? "Accepting…" : "Accept job"}
+                  </button>
+                </div>
+                <Notice n={actN} />
+              </div>
+            )}
           </div>
         )}
         {!pol && polN.status !== "error" && (
@@ -1588,7 +1660,11 @@ export default function Home() {
         <PoolsPanel ensureWallet={ensureWallet} refreshPools={loadPools} identityReady={ready} />
       </div>
       <div className={`tabpane ${tab === "coverage" ? "active" : ""}`}>
-        <CoveragePanel ensureWallet={ensureWallet} onGoPools={() => setTab("pools")} />
+        <CoveragePanel
+          ensureWallet={ensureWallet}
+          onGoPools={() => setTab("pools")}
+          identityAddr={identity ? identity.address.toLowerCase() : null}
+        />
       </div>
       <div className={`tabpane ${tab === "claims" ? "active" : ""}`}>
         <ClaimsPanel ensureWallet={ensureWallet} />

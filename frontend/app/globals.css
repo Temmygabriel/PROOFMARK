@@ -2072,6 +2072,16 @@ select.input option {
   font-size: 10px;
 }
 
+/* agent-only action block on a pending policy (Accept) */
+.pol-act {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
 /* honest conformance line — threshold only, no fake fill */
 .score-line {
   display: flex;

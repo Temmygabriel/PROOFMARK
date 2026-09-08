@@ -15,7 +15,7 @@ StudioNet by **two fresh deploys of the same working-tree source**:
 
 | Address | Role | On-chain proof |
 |---------|------|----------------|
-| **`0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`** | **canonical live** — seeded board, the address the frontend/env points at | clean **seed-live** board below (`e2e/results/seed-live-hardened.log`) |
+| **`0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`** | **canonical live** — seeded board with a settled payout, the address the frontend/env points at | **seed-live** board below + the planted claim (`e2e/results/seed-live-hardened.log` + `plant-payout.log`) |
 | `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` | e2e evidence (pool intentionally drained by the run) | **37/37 e2e** (`e2e/results/studionet-e2e-clean.log` + `studionet.json`) |
 
 Both deployed by `node e2e/run.js deploy --network studionet` from the hardened
@@ -54,15 +54,19 @@ The money-relevant rows (deposit credits the pool, an upheld claim debits it
 half of "GEN actually moved". The wallet-credit half (Mode B) is only enforceable on
 a balance-mirroring network — see [Residuals](#residuals).
 
-### Hardened seeded live board (`0x850F773B…`)
+### Hardened seeded live board (`0x850F773B…`) — a real payout now settled on it
 
 Written by `node e2e/seed-live.js`; every write finalized success, board re-read back
 live from the contract. Agent `agent-live-1788864539810` (wallet in
-`e2e/live-keys.json`), job `job-live-1788864539810` (1 GEN cover, deadline ~1 h out):
+`e2e/live-keys.json`), job `job-live-1788864539810` (1 GEN cover). On 2026-09-08 the
+seeded job's deadline passed with nothing delivered and the deterministic auto-breach
+claim was filed against it (`e2e/results/plant-payout.log`): claim **upheld**, the
+buyer paid **exactly 1.000000 GEN** from the Unrated pool, the 2 GEN bond refunded.
+Board re-read directly from the contract after settlement:
 
-| Tier | Pool | Locked | Live jobs |
+| Tier | Pool | Locked | Jobs |
 |------|------|--------|-----------|
-| unrated | 10.0600 GEN | 1.0000 GEN | 1 active job (payable premium 0.06 GEN paid) |
+| unrated | 9.0600 GEN | 0.0000 GEN | 1 settled payout: `job-live-1788864539810` (1 GEN covered, NOT DELIVERED) |
 | bronze | 5.0000 GEN | — | — |
 | silver | 3.0000 GEN | — | — |
 | gold | 2.0000 GEN | — | — |
@@ -72,7 +76,10 @@ Seed txs (all `[PASS]`, `e2e/results/seed-live-hardened.log`): register
 `0x95646645…98e3aba`, deposits `0x0718b1ec…2a0d0ed` (unrated 10) /
 `0xe4671e06…2b2e562` (bronze 5) / `0x18100fc9…459f1f2a` (silver 3) /
 `0x15a5672c…39d6c569c` (gold 2), issue `0xac5297d9…3950b244`, accept
-`0x261e5ae7…4bd2a728`.
+`0x261e5ae7…4bd2a728`. Settlement proof is the post-claim state read
+(`get_policy` status `claimed`, `get_claim_status` `upheld`, pool 10.0600 → 9.0600,
+locked 1.0000 → 0.0000) and the finalized claim on the contract's explorer history —
+the exact "coverage paid" row a reviewer looks up in the submission's Step 2.
 
 ### Direct-mode suite (2026-09-08)
 
