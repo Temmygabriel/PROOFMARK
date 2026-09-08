@@ -1,5 +1,7 @@
-# Force LF for the Bradbury build artifact + its minifier: CRLF would pad the
-# deploy source (36,902 B -> 37,676 B), shrinking the margin against Bradbury's
+# Force LF for deploy sources + the Bradbury build artifact + its minifier:
+# CRLF would pad the bytes (proofmark.py 72,965 B -> ~74.4 KB; bradbury build
+# 36,811 B -> 37,587 B), shrinking the margin against Bradbury's
 # BlockPubdataLimitReached pubdata cap for no benefit.
-intelligent-contracts/proofmark-bradbury.py            text eol=lf
+intelligent-contracts/proofmark.py              text eol=lf
+intelligent-contracts/proofmark-bradbury.py     text eol=lf
 e2e/minify_contract.py text eol=lf
