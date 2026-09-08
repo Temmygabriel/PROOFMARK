@@ -36,14 +36,17 @@ shares, and the deadline logic are all deterministic.
 |--------|---------|-------------|
 | `register(agent_id)` | no | Bind the caller's wallet to `agent_id` (once). |
 | `issue_policy(job_id, agent_id, coverage_atto, spec_hash, deadline_iso, expected_tier="")` | yes | Pay **at least** the premium (excess refunded) to open a `pending` policy on `job_id` against the agent. Reverts if the agent's quoted tier moved (`expected_tier`). |
-| `accept_job(job_id)` | no | The **insured agent** consents to a `pending` policy → `active`, freezing the spec on-chain (FIX-02). |
+| `accept_job(job_id)` | no | The **insured agent** consents to a `pending` policy → `active`, freezing the spec on-chain (FIX-02). Refuses a policy whose deadline has already passed (FIX-16) — an agent can never be bound to an impossible delivery and hit by an instant auto-breach. |
 | `reject_job(job_id)` | no | The agent declines a `pending` policy → `expired`; exposure released, premium refunded to the buyer. |
 | `cancel_pending_policy(job_id)` | no | The buyer withdraws their own `pending` policy → `expired`; exposure released, premium refunded. |
-| `submit_deliverable(job_id, deliverable_hash)` | no | The **active** insured agent records a deliverable. The CID is canonicalized and probed live (unresolvable → revert); frozen once the deadline passes. |
+| `expire_pending_policy(job_id)` | no | **Permissionless** (FIX-18): voids a `pending` policy whose deadline **and** 7-day claim window have passed — exposure released, premium refunded. Without it, a policy nobody accepted and nobody cancelled could lock LP capital forever. |
+| `submit_deliverable(job_id, deliverable_hash)` | no | The **active** insured agent records a deliverable. The CID is canonicalized and probed live (unresolvable → revert); frozen once the deadline passes, and frozen while a claim is pending (evidence stability, FIX-19). |
 | `expire_policy(job_id)` | no | Close an expired policy, releasing locked exposure. Buyer may from the deadline; anyone may after the 7-day claim window (FIX-09). |
 | `deposit(tier)` | yes | LP adds capital to a tier pool (zero-share deposits are rejected, FIX-11). |
 | `withdraw(tier, shares)` | no | LP redeems shares (blocked if it would leave the pool below its locked exposure). |
-| `file_claim(job_id)` | yes | Buyer stakes `CLAIM_BOND_ATTO` and triggers judgement (refused once the claim window has closed). |
+| `file_claim(job_id)` | yes | **Phase 1 of the two-phase claim (FIX-19/H-02):** buyer escrows `CLAIM_BOND_ATTO` and records the claim as `pending` — *deterministic, no consensus judgement*. Refused once the claim window has closed, while another claim is pending, or if the deliverable is not yet in. |
+| `judge_claim(job_id)` | no | **Phase 2:** permissionless, runs the GenLayer consensus judgement (`_judge_breach`). Because it carries no value, a failed/aborted judgement reverts without burning the escrowed bond. Resolution: `upheld` → payout + bond refund to buyer; `rejected` → bond forfeited to the pool. |
+| `rescind_pending_claim(job_id)` | no | Buyer-only recovery: cancels a `pending` claim before judgement and refunds the escrowed bond, returning the policy to `active`. |
 
 ### View methods
 
@@ -55,7 +58,7 @@ shares, and the deadline logic are all deterministic.
 | `get_policy(job_id)` | Status (`pending`/`active`/`claimed`/`expired`), coverage, deadline, deliverable hash, `agent_accepted`. |
 | `get_pool_info(tier)` | Pool balance, total shares, locked exposure. |
 | `get_lp_position(tier, address)` | An LP's share count in a tier. |
-| `get_claim_status(job_id)` | `none` / `pending` / `upheld` / `rejected`. |
+| `get_claim_status(job_id)` | `unresolved` / `pending` / `upheld` / `rejected` (canonical vocabulary, matches `proofmark.py`). |
 
 ## Key parameters
 
@@ -86,7 +89,9 @@ regression test in `tests/direct/test_proofmark.py`. Items 7, 9 and 10 are the
 2026-09-03 "Shape A" pass — the response to the reviewer-facing self-dealing
 review. Items 11–18 are the 2026-09-05 "Shape B" pass from the three-pass
 adversarial review in `SECURITY-CHECK/`. Shape B supersedes Shape A; the Shape A
-deploys are marked DO NOT USE (see PROOFMARK_DEPLOYMENT.md).
+deploys are marked DO NOT USE (see PROOFMARK_DEPLOYMENT.md). Item 19 is the GPT
+security-audit H-02 fix (two-phase claims); items 20–21 are the 2026-09-07
+adversarial re-audit ("Phase-7b") hardening.
 
 1. **Canonical identity keys.** `agent_id` / `job_id` are user-typed strings with
    no external registry. `_normalize_key()` lowercases + strips them before use as
@@ -186,6 +191,33 @@ three-pass adversarial review of Shape A. Each maps to a regression test in
     verdicts. **Share keys are normalized addresses (FIX-15)** so case variants
     can't fork an LP position, and the spec's own calendar is validated before
     any deadline math.
+19. **Judgement can't burn the claim bond (FIX-19 / H-02).** Claiming is two
+    phases: the payable `file_claim` is fully deterministic (it only escrows the
+    bond and records the claim as `pending`), and the GenLayer consensus
+    judgement runs in the separate non-payable `judge_claim`. A reverted,
+    aborted, or never-run judgement therefore can never forfeit the buyer's 2 GEN
+    bond (on a reverted payable call the value is *not* refunded — it burns into
+    the contract ledger). `rescind_pending_claim` is the buyer's recovery route
+    to cancel a pending claim and get the bond back.
+20. **Evidence custody split — a buyer can't manufacture a breach against an
+    agent that delivered (2026-09-07 adversarial re-audit).** The spec and the
+    deliverable have *opposite* custody. The deliverable is agent-supplied and
+    live-probed at `submit_deliverable`; the spec is buyer-supplied and only
+    shape-checked at issue. In `_judge_breach` a 4xx/oversized **deliverable**
+    now resolves as a breach (score 0 — the agent's own evidence is gone),
+    while a 4xx/oversized **spec** resolves as *rejected* (score 0 but not a
+    breach — the buyer's own evidence is gone, so the claim fails and the bond
+    is forfeited rather than paying out). Reverting was off the table for both
+    (it burns the bond and never resolves the claim); this split makes sure a
+    buyer who unpins its own spec can never turn a delivered job into a payout.
+21. **No impossible deliveries (FIX-16) and no forever-pending policies
+    (FIX-18).** `accept_job` refuses a policy whose deadline has passed — an
+    overdue policy is voided (buyer `cancel_pending_policy`, or permissionless
+    `expire_pending_policy` past its claim window), never accepted into
+    liability. And `expire_pending_policy` releases exposure + refunds the
+    premium for a `pending` policy past `deadline + CLAIM_WINDOW_SECONDS`, so a
+    policy no agent accepted and no buyer cancelled cannot lock LP capital
+    forever.
 
 ## Known residual (deliberate, disclosed)
 
@@ -231,8 +263,9 @@ three-pass adversarial review of Shape A. Each maps to a regression test in
 ## Testing
 
 - **Direct mode (fast, in-memory):** `python -m pytest tests/direct/test_proofmark.py -v`
-  — 46 tests covering every method plus the gaming vectors above (28 Shape A
-  tests adapted to the Shape B state machine + 18 new regression tests). Direct
+  — 55 tests covering every method plus the gaming vectors above (the Shape A/B
+  baselines adapted to the current state machine, plus the H-02 two-phase and
+  Phase-7b regression tests). Direct
   mode runs the leader half only, so FIX-10's validator containment is verified
   structurally + by lint, not executed here.
 - **On-chain smoke:** see [PROOFMARK_DEPLOYMENT.md](PROOFMARK_DEPLOYMENT.md) for the read/write

@@ -10,15 +10,22 @@ drifting apart.
 
 | Network | Address | Verified |
 |---|---|---|
-| **StudioNet** (61999) | `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3` | ✅ **37/37** e2e + **10/10** verify-payments + seeded live board (2026-09-06) |
+| **StudioNet** (61999) | `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6` | ✅ **37/37** e2e (on `0x1FcE88…`, same hardened artifact) + **seeded live board** (2026-09-08) |
 | **Testnet Bradbury** (4221) | `0x79C15889D5070321176994373C440778a9eC47c1` | deploy-only reads — **pre-rename Shape A artifact** (Proofmark redeploy blocked; see below) |
 
-> **Rebrand outcome (2026-09-06):** the contract source was renamed to `proofmark.py`
-> and the contract class renamed `Proofmark` as part of the product rebrand. That is a
-> **new deploy artifact**, so the StudioNet live proof was re-run on the fresh
-> **Proofmark** contract (`0x1c91…`, 37/37 + 10/10 + seeded board). The prior Shape B
-> deploy (`0x589472da571Db60151100b153D65a7170367E17D`, StudioNet e2e **37/37** PASS on
-> 2026-09-06) stands as the **historical pre-rename validation**.
+> **Current artifact (2026-09-08):** the contract source is `proofmark.py` (`class
+> Proofmark`) with the **Phase-7b hardening** — the GPT-audit H-02 two-phase-claim fix
+> plus the 2026-09-07 adversarial pass (evidence custody split, FIX-16 impossible
+> acceptance, FIX-18 forever-pending release). Two fresh StudioNet deploys of the same
+> working-tree source carry the live proof: a **37/37 full e2e** on
+> `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` and the **seeded live board** on
+> `0x850F773B…` (agent `agent-live-1788864539810` / job `job-live-1788864539810`).
+>
+> **Rebrand outcome (2026-09-06, superseded):** the rename to `proofmark.py` /
+> `class Proofmark` was a new deploy artifact; the pre-hardening rebranded contract
+> (`0x1c91…`, 37/37 + 10/10 + seeded board) stood as canonical until the hardened
+> re-proof above. The prior Shape B deploy (`0x589472da571Db60151100b153D65a7170367E17D`,
+> StudioNet e2e **37/37** PASS on 2026-09-06) is the **historical pre-rename validation**.
 >
 > **Bradbury:** a fresh Proofmark deploy is **blocked** — the 62,351-byte source exceeds
 > Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest known-good
