@@ -34,7 +34,15 @@ in `docs/PROOFMARK_LIVE_EVIDENCE.md`; the submission note + demo run-sheet/capti
 verified rebranded UI copy; `genlayer-project-explorer-submission.md` (a Rigor worked example) and
 `SECURITY-CHECK/e2e-deploy-spec.md` (historical Shape B runbook) kept verbatim on purpose. All rebrand
 commits were **pushed to GitHub 2026-09-07** (`origin/main` → `9a02783`); the Vercel env rename
-(`NEXT_PUBLIC_PROOFMARK_*` = StudioNet `0x1c91…`) is the last manual step.
+(`NEXT_PUBLIC_PROOFMARK_*` = StudioNet `0x1c91…`) was the last manual step.
+**Phase 7b (adversarial hardening) is DONE + LIVE-PROVEN (2026-09-08):** GPT-audit H-02
+two-phase claims + the adversarial pass (evidence custody split, FIX-16, FIX-18) closed the
+last reviewer-pickable flaws (contract items 19–21 in PROOFMARK_CONTRACT.md); **55/55** direct
+tests green. Re-proven live on StudioNet with fresh deploys of the hardened working tree — e2e
+**37/37** on `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7`, clean **seeded live board** on
+`0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`; `page.tsx` seed rebaked, docs re-pointed. The
+pre-hardening `0x1c91…` package is superseded (historical). **Manual:** flip Vercel env to
+`NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS = 0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`.
 
 ## What the project is
 
@@ -69,23 +77,38 @@ Four moving parts in the contract:
 
 ## Deployed contract addresses
 
-**Canonical (Proofmark, rebranded artifact `proofmark.py`, `class Proofmark`):**
-- **StudioNet (canonical Proofmark):** `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`
-  (deployed 2026-09-06, tx `0x42d1f3c5…a621279`; `e2e/results/studionet.json`).
-  - **Full e2e 37/37 PASS** (`studionet-proofmark-e2e.log`) + **verify-payments 10/10
-    PASS** (`studionet-proofmark-verify-payments.log`: LP deposit→withdraw roundtrip
-    pool 0→5→0; auto-breach claim upheld, pool debited exactly 1.000000 GEN). V3 judged
-    skipped live (evidence-gateway CIDs unresolved — residual, see LIVE_EVIDENCE).
-  - **Seeded live board** (`studionet-seed-live.log`): Unrated 10.06 / locked 1.00
-    (live agent `agent-live-1788715641710`, active job `job-live-1788715641710`),
-    Bronze 5, Silver 3, Gold 2. Independently re-read 2026-09-07 — state persisted.
-  - Live evidence + re-verify: `docs/PROOFMARK_LIVE_EVIDENCE.md`.
-  - StudioNet does NOT support `genlayer schema` ("not supported on this network").
-  - StudioNet RPC is flaky: read/call sometimes fail with ECONNRESET / SSL session-id
-    errors. Just retry — they succeed on the next attempt.
-  - `registered_at` on StudioNet includes fractional seconds; the deadline guard
-    (epoch-compare) parses ISO to integer epoch seconds, slices the fractional tail,
-    and requires a 60 s minimum horizon (Shape A fix, regression-tested).
+**Canonical — Proofmark, Phase-7b HARDENED artifact (`proofmark.py`, `class Proofmark`):**
+- **StudioNet (canonical LIVE — seeded board; `page.tsx` + Vercel env point at this):**
+  `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6` (deployed 2026-09-08 via `run.js deploy`).
+  - **Clean seed-live board** (`e2e/results/seed-live-hardened.log`): Unrated 10.0600 /
+    locked 1.0000, Bronze 5, Silver 3, Gold 2; live agent `agent-live-1788864539810`,
+    active job `job-live-1788864539810` (1 GEN cover, ~1h deadline; live wallet in
+    `e2e/live-keys.json`). Every write finalized success.
+- **StudioNet (e2e evidence — pool intentionally drained by the run):**
+  `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` (deployed 2026-09-08, same hardened
+  working-tree source). **Full e2e 37/37 PASS** (`studionet.json` +
+  `studionet-e2e-clean.log`): deposit credits pool 20; upheld auto-breach claim debits
+  pool 20.12→19.12 **exactly 1 GEN**; full LP withdraw drains to 0.
+  - Hardened deltas over the pre-hardening artifact: **evidence custody split** in
+    `_judge_breach` (a 4xx/oversized deliverable → breach; a 4xx/oversized spec →
+    rejected — a buyer can't manufacture a breach against an agent that delivered),
+    **FIX-16** (`accept_job` refuses post-deadline acceptance), **FIX-18**
+    (permissionless `expire_pending_policy` past deadline+7d), and the GPT-audit
+    **H-02** two-phase claims (FIX-19): payable `file_claim` is deterministic + escrows
+    the bond, the nondet judgement runs in the non-payable `judge_claim`,
+    `rescind_pending_claim` recovers the bond. **55/55 direct tests green**;
+    `genvm-lint` clean. Frontend H-04 (positive success check) / M-01 (pending
+    lifecycle) fixes are in the same batch.
+- **StudioNet (superseded first hardened deploy):** `0x9fac0b43D5fcE76E6115dB91E0a7105D16218a82`
+  (2026-09-07, tx `0x5b1a50…`; the first FIX-16/18 deploy — its e2e hit StudioNet RPC
+  flakiness at 26/37; superseded by the 2026-09-08 fresh deploys above).
+- **StudioNet (superseded pre-hardening canonical):** `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`
+  (deployed 2026-09-06, tx `0x42d1f3c5…`). 37/37 e2e + 10/10 verify-payments + seeded
+  board (agent `agent-live-1788715641710`); superseded by the hardened re-proof.
+  - StudioNet quirks (unchanged): no `genlayer schema` ("not supported on this network");
+    RPC is flaky (ECONNRESET / SSL session-id) — retry and it succeeds; `registered_at`
+    includes fractional seconds — the deadline guard (epoch-compare) parses ISO to
+    integer epoch seconds, slices the fractional tail, requires a 60 s minimum horizon.
 - **Bradbury (canonical but pre-rename Shape A):** `0x79C15889D5070321176994373C440778a9eC47c1`
   (deployed 2026-09-03, tx `0x14222a14…3832350a`; read-verified live).
   - **Proofmark fresh deploy BLOCKED (honest residual):** the 62,351-byte

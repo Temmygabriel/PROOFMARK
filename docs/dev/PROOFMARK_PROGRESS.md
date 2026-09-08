@@ -17,6 +17,37 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **Phase 7b (adversarial contract re-audit + hardening) — DONE + LIVE-PROVEN (2026-09-08):**
+  the adversarial audit closed three reviewer-pickable flaws in `proofmark.py` (all
+  committed with this entry):
+  (1) **evidence custody split** — in `_judge_breach` a 4xx/oversized **deliverable**
+  (agent's evidence, live-probed at submit) resolves as a *breach*, while a 4xx/oversized
+  **spec** (buyer's evidence, only shape-checked at issue) resolves as *rejected* — a
+  buyer who unpins its own spec can no longer manufacture a payout against an agent that
+  delivered. (2) **FIX-16** — `accept_job` refuses a policy whose deadline has passed (an
+  agent can never be bound to an already-impossible delivery and hit by an instant
+  auto-breach). (3) **FIX-18** — new permissionless `expire_pending_policy` voids a
+  PENDING policy past `deadline + 7-day claim window` (exposure released, premium
+  refunded), so a never-accepted/never-cancelled policy can't lock LP capital forever.
+  Plus the GPT-audit **H-02** two-phase claims (FIX-19): payable `file_claim` is
+  deterministic (escrows the 2 GEN bond, records `pending`); the nondet judgement runs in
+  the separate **non-payable** `judge_claim`, so a failed judgement reverts with no value
+  and can never burn the bond (`rescind_pending_claim` recovers it). Frontend **H-04**
+  (positive success check) + **M-01** (full pending lifecycle) fixes are in this batch.
+  **Gates:** `genvm-lint` clean; **55/55 direct tests green** (`pytest tests/direct/`).
+  **Live re-proof on the hardened artifact (2026-09-08, StudioNet):** fresh deploy → e2e
+  **37/37 PASS** on `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` (`studionet.json` + log;
+  money rows exact: deposit credits pool 20, upheld auto-breach claim debits 20.12→19.12,
+  withdraw drains to 0); fresh deploy → **clean seed-live board** on
+  `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6` (Unrated 10.0600 / locked 1.0000 /
+  Bronze 5 / Silver 3 / Gold 2; agent/job ids `agent-live-1788864539810` /
+  `job-live-1788864539810`; wallet in `e2e/live-keys.json`). `page.tsx` seed rebaked
+  (`SEEDED_CONTRACT` → 0x850F; esbuild TSX parse gate clean); CONTRACT.md /
+  DEPLOYMENT.md / LIVE_EVIDENCE.md / intelligent-contracts README re-pointed to the
+  hardened canonical. The pre-hardening `0x1c91…` package (37/37 + 10/10 + seeded board)
+  is recorded as **superseded** (kept historical). **Manual follow-up:** flip the Vercel
+  env `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS` → `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
+  and redeploy so the live demo surface runs the exact hardened source.
 - **Phase 7 (evidence + close-out) — DONE (2026-09-07, commits `5282015` + `d790be7` + this one):**
   new `docs/PROOFMARK_LIVE_EVIDENCE.md` with the canonical evidence (StudioNet `0x1c91…` 37/37 +
   10/10 + seeded board, deploy tx, tx-hash tables, residuals incl. the Bradbury pubdata cap and the
@@ -113,14 +144,16 @@ Phase state (newest first):
   validation*).
 
 Next (remaining — all on the user's side or optional): **manual Vercel step** — rename the env vars
-to the `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS` / `NEXT_PUBLIC_PROOFMARK_NETWORK` pair, set the new
-StudioNet address `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`, remove the old-name env vars, redeploy
-(the old Vercel domain is replaced). Then the demo take: dry-run the §05 path live on a fresh profile,
+to the `NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS` / `NEXT_PUBLIC_PROOFMARK_NETWORK` pair, set the
+hardened StudioNet address `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`, remove the old-name env
+vars, redeploy
+(the old Vercel domain is replaced). Then the demo take: dry-run the §05 path live on a fresh profile
+on the hardened board (seeded agent/job ids `agent-live-1788864539810` / `job-live-1788864539810`),
 film from the run-sheet/captions, fill the remaining `[YOU: …]` blanks in the submission note (logo,
 dropdown tags, YouTube link, the planted job id), and submit. Optional: live judged-path (V3) smoke on
 StudioNet after the demo take, re-verifying the §05 board numbers if its payout shifts a pool. All
-rebrand commits are pushed to GitHub (2026-09-07, `origin/main` = `9a02783`); after the env flip,
-confirm the Vercel rebuild deployed the rebrand (page foot + board numbers on the new address).
+rebrand + hardening commits are pushed to GitHub; after the env flip, confirm the Vercel rebuild
+deployed the hardened contract (page foot + board numbers on the new address).
 
 ## Status (2026-09-03)
 
