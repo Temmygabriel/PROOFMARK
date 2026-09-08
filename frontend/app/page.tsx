@@ -1318,7 +1318,9 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
       setCSince(null);
       setVerdict(v);
       setCN(idleNotice); // the verdict stamp below says it all
-      if (v !== "unresolved")
+      // Only a resolved verdict belongs on the feed -- never a still-pending
+      // claim (two-phase) or an unresolved lookup.
+      if (v === "upheld" || v === "rejected")
         pushFeed({ action: "verdict", jobId: cJobId.trim(), verdict: v });
     } catch (e: any) {
       setCSince(null);
