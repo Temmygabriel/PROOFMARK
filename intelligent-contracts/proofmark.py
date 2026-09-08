@@ -121,8 +121,13 @@ Shape B hardening (security-fixes pass, post Shape A):
   (reachable + under MAX_EVIDENCE_BYTES) so an unresolvable CID reverts on
   the AGENT's transaction, not on the buyer's later claim. Evidence is frozen
   at the deadline -- the agent cannot swap in garbage the moment a claim
-  looks likely. A CID that was retrievable at submission but 404s at claim
-  time is adjudicated as a breach, never as an unjudgeable revert.
+  looks likely. Custody split at judge time: the DELIVERABLE is
+  agent-controlled and was probed at submission, so a deliverable that 404s
+  at claim time is a breach, never an unjudgeable revert; the SPEC is
+  buyer-controlled and only shape-checked at issue, so a spec that 404s (or
+  exceeds the judge-time size cap) resolves REJECTED -- the buyer's own
+  evidence failed, and a buyer who can unpin its own spec must not be able to
+  manufacture a breach against an agent that delivered.
 - Prompt hardening (FIX-04): spec and deliverable bytes are UNTRUSTED input,
   wrapped in neutralising fences (_fence) with an explicit "injection" flag
   in the output schema; a detected injection attempt rejects the claim.
@@ -147,13 +152,27 @@ Shape B hardening (security-fixes pass, post Shape A):
   "fixed" with a mutable key.
 - Claim window (FIX-09): claims are refused 7 days (CLAIM_WINDOW_SECONDS)
   after the deadline, and expire_policy is permissionless past that same
-  boundary -- an abandoned policy can never lock LP capital forever.
+  boundary -- an abandoned ACTIVE policy can never lock LP capital forever.
+  The same boundary now voids an abandoned PENDING policy permissionlessly
+  (FIX-18: expire_pending_policy releases its exposure and refunds the buyer's
+  premium), and accept_job refuses a policy whose deadline has already passed
+  (FIX-16) so an agent can never be bound to an impossible delivery and hit by
+  an instant auto-breach.
 - Score integrity (FIX-06): an out-of-range LLM score raises instead of
   clamping, preserving the divergence signal validators compare. Premiums
   (FIX-14): issue_policy accepts value >= premium and refunds the excess,
   removing the exact-premium front-run race. LP share keys and addresses are
   normalized (FIX-15), impossible calendar dates are rejected, and every
   emit_transfer is on="finalized" with reentrancy notes (FIX-17).
+- Two-phase claims (FIX-19): file_claim is payable and DETERMINISTIC -- it
+  escrows the 2 GEN bond and, for a judged path, only records a pending claim.
+  The non-deterministic conformance judgement runs in a separate NON-payable
+  judge_claim call, so a failed judgement (transient gateway outage, LLM
+  error, validator disagreement) reverts without any attached value -- the
+  bond can never be burned by a reverted payable call, and the pending claim
+  is retryable or rescindable (rescind_pending_claim refunds the escrowed
+  bond). The no-deliverable auto-breach path is fully deterministic and still
+  resolves inside file_claim itself.
 
 Known residual (deliberate, disclosed): an auto-breach drip now needs TWO
 separate wallets under one controller that BOTH consent -- the buyer wallet
@@ -461,6 +480,7 @@ class Proofmark(gl.Contract):
 
     policies: TreeMap[str, Policy]
     resolved_claims: TreeMap[str, str]   # job_id -> "upheld" | "rejected"
+    pending_claims: TreeMap[str, u256]   # job_id -> escrowed claim bond (2 GEN) awaiting judgement (FIX-19/H-02)
 
     tier_balance: TreeMap[str, u256]         # tier -> pool ledger (atto)
     tier_shares: TreeMap[str, u256]          # tier -> total LP shares
@@ -768,6 +788,16 @@ class Proofmark(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not in pending state")
         if gl.message.sender_address != self.agents[policy.agent_id].owner:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} only the insured agent may accept")
+        if _iso_to_epoch_seconds(gl.message_raw["datetime"]) > _iso_to_epoch_seconds(policy.deadline_iso):
+            # FIX-16: accepting after the deadline binds the agent to an
+            # already-impossible delivery -- the buyer could then file the
+            # "no deliverable submitted" auto-breach immediately. An overdue
+            # policy is voided by the buyer (cancel) or, past the claim
+            # window, permissionlessly (expire_pending_policy); it is never
+            # accepted into liability.
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} deadline has passed -- an overdue policy cannot be accepted"
+            )
         policy.status = STATUS_ACTIVE
         policy.agent_accepted = True
 
@@ -802,6 +832,30 @@ class Proofmark(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not pending")
         if gl.message.sender_address != policy.buyer:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} only the buyer may cancel")
+        policy.status = STATUS_EXPIRED
+        self._release_exposure(policy.pool_tier, int(policy.coverage_atto))
+        self._refund_premium(policy)
+
+    @gl.public.write
+    def expire_pending_policy(self, job_id: str) -> None:
+        """Permissionless release of a PENDING policy whose deadline has passed
+        and whose claim window has closed (FIX-18). An active policy is already
+        expiry-able by anyone past that boundary (expire_policy); a pending one
+        that neither the agent accepted nor the buyer cancelled would otherwise
+        lock LP capital forever. Same boundary, same effect: exposure released,
+        premium refunded to the buyer, policy voided."""
+        job_key = _normalize_key(job_id)
+        if job_key not in self.policies:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown job_id")
+        policy = self.policies[job_key]
+        if policy.status != STATUS_PENDING:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not in pending state")
+        now_s = _iso_to_epoch_seconds(gl.message_raw["datetime"])
+        cutoff_s = _iso_to_epoch_seconds(policy.deadline_iso) + CLAIM_WINDOW_SECONDS
+        if now_s <= cutoff_s:
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} pending policy still within its deadline + claim window"
+            )
         policy.status = STATUS_EXPIRED
         self._release_exposure(policy.pool_tier, int(policy.coverage_atto))
         self._refund_premium(policy)
@@ -864,6 +918,13 @@ class Proofmark(gl.Contract):
         policy = self.policies[job_key]
         if policy.status != STATUS_ACTIVE:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not active")
+        if job_key in self.pending_claims:
+            # Evidence must be stable from the moment a claim is filed until it
+            # resolves -- otherwise the agent could swap the CID mid-judgement
+            # (FIX-19 / H-02). Two-phase claims make this window explicit.
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} deliverable frozen while a claim is pending"
+            )
 
         agent_owner = self.agents[policy.agent_id].owner
         if gl.message.sender_address != agent_owner:
@@ -896,6 +957,13 @@ class Proofmark(gl.Contract):
         policy = self.policies[job_key]
         if policy.status != STATUS_ACTIVE:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not active")
+        if job_key in self.pending_claims:
+            # Exposure stays locked until the pending claim resolves or is
+            # rescinded -- expiring mid-judgement would double-release it
+            # (FIX-19 / H-02).
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} verdict pending — resolve or rescind the claim before expiring"
+            )
         now_s = _iso_to_epoch_seconds(gl.message_raw["datetime"])
         deadline_s = _iso_to_epoch_seconds(policy.deadline_iso)
         if now_s <= deadline_s:
@@ -1052,6 +1120,8 @@ class Proofmark(gl.Contract):
         job_key = _normalize_key(job_id)
         if job_key in self.resolved_claims:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} claim already resolved for job_id")
+        if job_key in self.pending_claims:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} claim already pending for job_id")
         if job_key not in self.policies:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown job_id")
 
@@ -1090,12 +1160,26 @@ class Proofmark(gl.Contract):
                 raise gl.vm.UserError(
                     f"{ERROR_EXPECTED} deadline has not passed and no deliverable was submitted yet"
                 )
-            breach = True
-        else:
-            # ---------------- Judged consensus (the only nondet part) ----------------
-            verdict = self._judge_breach(policy.spec_hash, policy.deliverable_hash)
-            breach = bool(verdict["breach"])
+            # Deterministic auto-breach -- resolve immediately. No AI call, so
+            # nothing here can burn the bond (FIX-19 / H-02).
+            self._resolve_claim(job_key, policy, True)
+            return
 
+        # Judged path (FIX-19 / H-02): file_claim is DETERMINISTIC and only
+        # escrows the bond + records the pending claim. The non-deterministic
+        # conformance judgement runs in the separate NON-payable judge_claim,
+        # so a failed judgement (transient gateway outage, LLM error, validator
+        # disagreement) reverts with NO attached value -- the 2 GEN bond is
+        # never burned by a reverted payable call, and the pending claim is
+        # retryable (judge_claim) or recoverable (rescind_pending_claim).
+        self.pending_claims[job_key] = u256(CLAIM_BOND_ATTO)
+
+    def _resolve_claim(self, job_key: str, policy, breach: bool) -> None:
+        """Shared resolution for both claim paths. Runs after the judgement
+        (deterministic auto-breach inside file_claim, or the successful
+        judge_claim consensus verdict) and is the only place a claim settles.
+        Bond refund goes to the policy buyer (who paid it), never to the
+        caller -- judge_claim is permissionless and may be invoked by anyone."""
         self.resolved_claims[job_key] = "upheld" if breach else "rejected"
         policy.status = STATUS_CLAIMED
 
@@ -1117,10 +1201,10 @@ class Proofmark(gl.Contract):
             gl.get_contract_at(policy.buyer).emit_transfer(value=u256(payout), on="finalized")
             # on="finalized": state commits before the transfer executes --
             # the buyer cannot re-enter this contract mid-claim.
-            # Legitimate claim -- refund the anti-spam bond.
-            gl.get_contract_at(gl.message.sender_address).emit_transfer(
+            # Legitimate claim -- refund the anti-spam bond to the buyer.
+            gl.get_contract_at(policy.buyer).emit_transfer(
                 value=u256(CLAIM_BOND_ATTO), on="finalized"
-                # Same on="finalized" guarantee: sender re-entry is impossible
+                # Same on="finalized" guarantee: re-entry is impossible
                 # because this call's effects are already committed.
             )
         else:
@@ -1130,6 +1214,59 @@ class Proofmark(gl.Contract):
             self.tier_balance[tier] = u256(pool_value + CLAIM_BOND_ATTO)
 
         self._recompute_tier(agent_key)
+
+    @gl.public.write
+    def judge_claim(self, job_id: str) -> None:
+        """Run the non-deterministic conformance judgement for a claim that
+        file_claim escrowed. Deliberately NOT payable (FIX-19 / H-02): if the
+        judgement fails -- transient gateway outage, malformed/out-of-range
+        LLM output, injection detection, validator disagreement that never
+        reaches a verdict -- the call reverts with no attached value, so
+        nothing burns and the pending claim can simply be retried, or the
+        buyer can walk away via rescind_pending_claim. Permissionless: anyone
+        can settle a pending claim to its correct outcome, so a vanished buyer
+        cannot trap the escrowed bond or the locked exposure."""
+        job_key = _normalize_key(job_id)
+        if job_key not in self.pending_claims:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} no pending claim for job_id")
+        if job_key in self.resolved_claims:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} claim already resolved for job_id")
+        if job_key not in self.policies:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown job_id")
+
+        policy = self.policies[job_key]
+        if policy.status != STATUS_ACTIVE:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not active")
+        if policy.deliverable_hash == "":
+            # The no-deliverable path resolves deterministically inside
+            # file_claim itself -- it never becomes a pending claim.
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} no deliverable to judge")
+
+        # ---------------- Judged consensus (the only nondet part) ----------------
+        verdict = self._judge_breach(policy.spec_hash, policy.deliverable_hash)
+        del self.pending_claims[job_key]
+        self._resolve_claim(job_key, policy, bool(verdict["breach"]))
+
+    @gl.public.write
+    def rescind_pending_claim(self, job_id: str) -> None:
+        """Buyer abandons a pending claim and recovers the escrowed bond. The
+        policy returns to active (exposure stays locked) and can be expired or
+        re-claimed normally. judge_claim (permissionless) is the preferred
+        route -- it settles the claim to its correct outcome; rescind exists
+        for the case where the evidence is unjudgeable (e.g. gateway outage)
+        and the buyer prefers to walk away rather than keep retrying."""
+        job_key = _normalize_key(job_id)
+        if job_key not in self.pending_claims:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} no pending claim for job_id")
+        if job_key not in self.policies:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown job_id")
+
+        policy = self.policies[job_key]
+        if gl.message.sender_address != policy.buyer:
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} only the policy buyer may rescind the pending claim")
+
+        del self.pending_claims[job_key]
+        gl.get_contract_at(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO), on="finalized")
 
     def _judge_breach(self, spec_hash: str, deliverable_hash: str) -> dict:
         def leader_fn() -> dict:
@@ -1142,26 +1279,35 @@ class Proofmark(gl.Contract):
                 raise gl.vm.UserError(f"{ERROR_TRANSIENT} evidence gateway rate-limited")
             if spec_res.status >= 500 or deliverable_res.status >= 500:
                 raise gl.vm.UserError(f"{ERROR_TRANSIENT} evidence gateway unavailable")
-            if spec_res.status >= 400 or deliverable_res.status >= 400:
-                # Both CIDs were probed retrievable at submission. A 4xx now
-                # means the evidence was unpinned after submission -- that is a
-                # breach, not an unjudgeable claim. Reverting here is exactly
-                # what let an agent veto claims permanently by unpinning after
-                # the fact, so a post-probe 4xx must resolve as a breach rather
-                # than revert (FIX-01 Step 5). No status codes appear in any
-                # error text (FIX-13).
-                which = "spec" if spec_res.status >= 400 else "deliverable"
-                return {"score": 0, "breach": True}
+            if deliverable_res.status >= 400:
+                # The two CIDs have opposite custody, so a failure resolves
+                # against whichever party's evidence it is. The DELIVERABLE is
+                # agent-supplied and live-probed at submit_deliverable -- a 4xx
+                # now means the agent unpinned it after submission, which is a
+                # breach, not an unjudgeable claim. The SPEC is buyer-supplied
+                # and only shape-checked at issue_policy -- a 4xx now means the
+                # BUYER's own evidence is gone, and the claim fails (rejected,
+                # bond forfeited) rather than paying out. A buyer who can unpin
+                # its own spec must never be able to manufacture a breach
+                # against an agent that delivered. Reverting is off the table
+                # for both: it burns the bond and never resolves the claim
+                # (FIX-01 Step 5). No status codes appear in any error text
+                # (FIX-13).
+                return {"score": 0, "breach": True}  # agent's evidence gone
+            if spec_res.status >= 400:
+                return {"score": 0, "breach": False}  # buyer's evidence gone
 
             # Defence-in-depth size caps (FIX-05): the probe at submission
             # bounds the deliverable, but content can grow or truncate later,
-            # so cap again here before anything reaches the prompt.
+            # so cap again here before anything reaches the prompt. Same
+            # custody split: an oversized deliverable is the agent's breach;
+            # an oversized spec is the buyer's own evidence failing.
             spec_body = spec_res.body or b""
             deliv_body = deliverable_res.body or b""
-            if len(spec_body) > MAX_EVIDENCE_BYTES:
-                return {"score": 0, "breach": True}  # oversized spec = unverifiable contract
             if len(deliv_body) > MAX_EVIDENCE_BYTES:
                 return {"score": 0, "breach": True}  # oversized deliverable = breach
+            if len(spec_body) > MAX_EVIDENCE_BYTES:
+                return {"score": 0, "breach": False}  # oversized spec = buyer's evidence unverifiable
 
             spec_text = spec_body.decode("utf-8", errors="replace")
             deliverable_text = deliv_body.decode("utf-8", errors="replace")
@@ -1219,5 +1365,12 @@ class Proofmark(gl.Contract):
 
     @gl.public.view
     def get_claim_status(self, job_id: str) -> str:
+        """Claim lifecycle: unresolved (never filed) / pending (filed,
+        judgement in progress -- two-phase claim, FIX-19) / upheld / rejected.
+        This is the canonical vocabulary; CONTRACT.md documents it verbatim."""
         key = _normalize_key(job_id)
-        return self.resolved_claims[key] if key in self.resolved_claims else "unresolved"
+        if key in self.resolved_claims:
+            return self.resolved_claims[key]
+        if key in self.pending_claims:
+            return "pending"
+        return "unresolved"

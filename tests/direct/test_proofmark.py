@@ -570,7 +570,9 @@ def test_claim_judged_upheld(direct_vm, direct_deploy, direct_alice, direct_bob,
 
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
-    contract.file_claim("job-1")
+    contract.file_claim("job-1")  # two-phase (FIX-19/H-02): escrows the bond
+    assert contract.get_claim_status("job-1") == "pending"
+    contract.judge_claim("job-1")  # non-payable verdict settles the claim
 
     assert contract.get_claim_status("job-1") == "upheld"
     info = contract.get_pool_info("unrated")
@@ -602,6 +604,7 @@ def test_claim_judged_rejected_bond_forfeited(
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
     contract.file_claim("job-1")
+    contract.judge_claim("job-1")
 
     assert contract.get_claim_status("job-1") == "rejected"
     info = contract.get_pool_info("unrated")
@@ -852,6 +855,7 @@ def test_post_probe_unpin_is_breach_not_revert(direct_vm, direct_deploy,
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
     contract.file_claim("job-1")  # must NOT revert
+    contract.judge_claim("job-1")  # judge decides the unpinned deliverable = breach
 
     assert contract.get_claim_status("job-1") == "upheld"
     assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
@@ -945,8 +949,10 @@ def test_unaccepted_policy_cannot_submit_or_claim(direct_vm, direct_deploy,
     with direct_vm.expect_revert("policy not active"):
         contract.file_claim("job-1")
 
-    accept(direct_vm, contract, direct_bob, "job-1")
-    assert contract.get_policy("job-1")["status"] == "active"
+    # FIX-16: accepting after the deadline is refused -- an overdue policy
+    # can no longer be bound into an instant "no deliverable" auto-breach.
+    with direct_vm.expect_revert("deadline has passed"):
+        accept(direct_vm, contract, direct_bob, "job-1")
 
 
 def test_reject_job_releases_and_refunds(direct_vm, direct_deploy, direct_alice,
@@ -1051,6 +1057,7 @@ def test_bronze_requires_breach_rate(direct_vm, direct_deploy, direct_alice,
         direct_vm.sender = buyer
         direct_vm.value = CLAIM_BOND
         contract.file_claim(jid)
+        contract.judge_claim(jid)  # two-phase (FIX-19/H-02)
         assert contract.get_claim_status(jid) == "rejected"
 
     # job-1 never received a deliverable -> deterministic auto-breach (upheld).
@@ -1194,9 +1201,24 @@ def test_out_of_range_score_rejected(direct_vm, direct_deploy, direct_alice,
     mock_judgement(direct_vm, 250)  # adversarial echo, not a real grade
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")  # deterministic file -- escrows bond, succeeds
+    assert contract.get_claim_status("job-1") == "pending"
+
+    # The out-of-range score makes the NON-payable verdict call revert. No value
+    # is attached, so the bond is never burned and the claim stays pending
+    # (FIX-19 / H-02).
     with direct_vm.expect_revert("score out of range"):
-        contract.file_claim("job-1")
-    assert contract.get_claim_status("job-1") == "unresolved"
+        contract.judge_claim("job-1")
+    assert contract.get_claim_status("job-1") == "pending"
+
+    # Retry with a sane grade settles the same pending claim. (mock_llm keeps
+    # the first registration, so clear + re-register everything.)
+    direct_vm.clear_mocks()
+    mock_cid(direct_vm, SPEC, "some spec")
+    mock_cid(direct_vm, DELIV_BAD, "some deliverable")
+    mock_judgement(direct_vm, 5)
+    contract.judge_claim("job-1")
+    assert contract.get_claim_status("job-1") == "upheld"
 
 
 def test_zero_share_deposit_rejected(direct_vm, direct_deploy, direct_alice,
@@ -1254,6 +1276,272 @@ def test_rate_limit_maps_to_transient(direct_vm, direct_deploy, direct_alice,
     direct_vm.mock_web(r".*" + SPEC + r".*", {"status": 429, "body": ""})
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")  # deterministic file -- succeeds, escrows bond
+    assert contract.get_claim_status("job-1") == "pending"
+
+    # The verdict call (non-payable) reverts on the transient 429 -- NO value is
+    # attached to judge_claim, so the bond is NOT burned (FIX-19 / H-02). The
+    # claim stays pending and is retryable.
     with direct_vm.expect_revert("rate-limited"):
-        contract.file_claim("job-1")
+        contract.judge_claim("job-1")
+    assert contract.get_claim_status("job-1") == "pending"
+
+    # Gateway recovers: the same pending claim settles normally. (mock_llm keeps
+    # the first registration, so clear + re-register everything.)
+    direct_vm.clear_mocks()
+    mock_cid(direct_vm, SPEC, "some spec")
+    mock_cid(direct_vm, DELIV_OK, "deliverable")
+    mock_judgement(direct_vm, 95)  # deliverable conforms
+    contract.judge_claim("job-1")
+    assert contract.get_claim_status("job-1") == "rejected"
+
+
+def test_spec_unavailable_at_judge_is_rejected_not_breach(
+    direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
+):
+    """Custody split (FIX-01): the SPEC is buyer-supplied and only shape-checked
+    at issue, so a spec that 404s at judge time means the BUYER's own evidence is
+    gone -- the claim is REJECTED (bond forfeited, agent not demoted), never a
+    manufactured breach against an agent that delivered conforming work."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    mock_cid(direct_vm, DELIV_OK, "React dashboard with 5 pages delivered.")
+    direct_vm.sender = direct_bob
+    contract.submit_deliverable("job-1", DELIV_OK)
+
+    # The buyer unpins its own spec after the agent already delivered.
+    direct_vm.mock_web(r".*" + SPEC + r".*", {"status": 404, "body": ""})
+
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")
+    contract.judge_claim("job-1")
+
+    assert contract.get_claim_status("job-1") == "rejected"
+    assert contract.get_profile("agent-a")["claims_upheld_against"] == 0
+    info = contract.get_pool_info("unrated")
+    assert info["locked_exposure_atto"] == 0
+    # Premium stays, bond forfeited to the pool, coverage never paid out.
+    assert info["balance_atto"] == 20 * 10**18 + prem + CLAIM_BOND
+
+
+def test_spec_oversized_at_judge_is_rejected(
+    direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
+):
+    """FIX-05 custody split: a spec that grew past MAX_EVIDENCE_BYTES at judge
+    time is the buyer's own evidence failing -- rejected, not a breach."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    mock_cid(direct_vm, DELIV_OK, "React dashboard with 5 pages delivered.")
+    direct_vm.sender = direct_bob
+    contract.submit_deliverable("job-1", DELIV_OK)
+
+    direct_vm.mock_web(r".*" + SPEC + r".*",
+                       {"status": 200, "body": b"x" * (128 * 1024 + 1)})
+
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")
+    contract.judge_claim("job-1")
+
+    assert contract.get_claim_status("job-1") == "rejected"
+    assert contract.get_profile("agent-a")["claims_upheld_against"] == 0
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + prem + CLAIM_BOND
+
+
+def test_expire_pending_policy_releases_after_window(
+    direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie, direct_owner
+):
+    """FIX-18: a PENDING policy the agent never accepted and the buyer never
+    cancelled can be expired by ANYONE once its deadline + claim window have
+    passed -- locked exposure released, premium refunded to the buyer."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    assert contract.get_policy("job-1")["status"] == "pending"
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == coverage
+
+    # Within the deadline + claim window, expiry is refused.
+    direct_vm.warp(AFTER_DEADLINE)
+    direct_vm.sender = direct_owner
+    with direct_vm.expect_revert("still within its deadline"):
+        contract.expire_pending_policy("job-1")
+
+    # Past the boundary: anyone can void it; the premium returns to the buyer.
+    direct_vm.warp(PAST_WINDOW)
+    contract.expire_pending_policy("job-1")
+    assert contract.get_policy("job-1")["status"] == "expired"
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18
+
+
+# ---------------------------------------------------------------------------
+# Two-phase claims (FIX-19 / H-02) -- failed judgements must never burn the bond
+# ---------------------------------------------------------------------------
+
+def _judged_policy(direct_vm, contract, buyer, agent_acct, job_id, score=95):
+    """Issue + accept + deliver a conforming deliverable so file_claim takes the
+    judged (non-deterministic) path, then mock the spec + LLM for judgement."""
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, buyer, job_id, "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, agent_acct, job_id)
+    mock_cid(direct_vm, DELIV_OK, "React dashboard with 5 pages delivered.")
+    direct_vm.sender = agent_acct
+    contract.submit_deliverable(job_id, DELIV_OK)
+    mock_cid(direct_vm, SPEC, "Build a React dashboard with 5 pages.")
+    mock_judgement(direct_vm, score)
+    direct_vm.sender = buyer
+    direct_vm.value = CLAIM_BOND
+
+
+def test_judge_claim_requires_a_pending_claim(direct_vm, direct_deploy,
+                                              direct_alice, direct_bob,
+                                              direct_charlie, direct_owner):
+    """judge_claim is only valid for a claim file_claim escrowed -- an
+    unclaimed policy, a non-active policy, or an already-resolved claim all
+    revert, so nobody can settle (or double-settle) a claim out of thin air."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    # No claim filed -> no pending claim to judge.
+    with direct_vm.expect_revert("no pending claim"):
+        contract.judge_claim("job-1")
+
+    # Auto-breach resolves inside file_claim itself -> never a pending claim.
+    direct_vm.warp(AFTER_DEADLINE)
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")
+    assert contract.get_claim_status("job-1") == "upheld"
+    with direct_vm.expect_revert("no pending claim"):
+        contract.judge_claim("job-1")
+
+
+def test_pending_claim_freezes_deliverable_and_expiry(direct_vm, direct_deploy,
+                                                      direct_alice, direct_bob,
+                                                      direct_charlie, direct_owner):
+    """While a judgement is pending: the agent cannot swap the deliverable
+    (evidence must be stable until resolution) and nobody can expire the policy
+    (exposure must stay locked until the claim settles or is rescinded)."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    _judged_policy(direct_vm, contract, direct_charlie, direct_bob, "job-1")
+    contract.file_claim("job-1")  # judged path -> pending
+    assert contract.get_claim_status("job-1") == "pending"
+    assert contract.get_policy("job-1")["status"] == "active"
+
+    # Deliverable frozen while pending (even pre-deadline -- a claim is live).
+    direct_vm.sender = direct_bob
+    with direct_vm.expect_revert("frozen while a claim is pending"):
+        contract.submit_deliverable("job-1", DELIV_OK)
+
+    # Expiry blocked while pending -- exposure stays locked for the verdict.
+    direct_vm.warp(AFTER_DEADLINE)
+    direct_vm.sender = direct_owner
+    with direct_vm.expect_revert("verdict pending"):
+        contract.expire_policy("job-1")
+    direct_vm.sender = direct_charlie
+    with direct_vm.expect_revert("verdict pending"):
+        contract.expire_policy("job-1")
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 10**18
+
+
+def test_permissionless_judge_claim_refunds_bond_to_buyer(direct_vm, direct_deploy,
+                                                          direct_alice, direct_bob,
+                                                          direct_charlie, direct_owner):
+    """judge_claim is permissionless: a third party can settle a pending claim
+    to its correct outcome, and the escrowed bond refund goes to the POLICY
+    BUYER who paid it -- never to the caller."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    _judged_policy(direct_vm, contract, direct_charlie, direct_bob, "job-1", score=5)
+    contract.file_claim("job-1")
+    assert contract.get_claim_status("job-1") == "pending"
+
+    # A stranger runs the consensus judgement; the payout still goes to the buyer.
+    direct_vm.sender = direct_owner
+    contract.judge_claim("job-1")
+
+    assert contract.get_claim_status("job-1") == "upheld"
+    assert contract.get_profile("agent-a")["claims_upheld_against"] == 1
+    # Pool lost exactly the coverage; bond refunded to the buyer (not the pool).
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + premium_for(10**18, "unrated") - 10**18
+
+
+def test_rescind_pending_claim_returns_policy_to_active(direct_vm, direct_deploy,
+                                                        direct_alice, direct_bob,
+                                                        direct_charlie, direct_owner):
+    """If the evidence is unjudgeable (e.g. gateway outage) the buyer can walk
+    away: rescind releases the escrowed bond, the policy returns to active with
+    exposure still locked, and a fresh claim can be filed later."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    _judged_policy(direct_vm, contract, direct_charlie, direct_bob, "job-1")
+    contract.file_claim("job-1")
+    assert contract.get_claim_status("job-1") == "pending"
+
+    # Only the buyer can rescind their own escrowed bond.
+    direct_vm.sender = direct_owner
+    with direct_vm.expect_revert("only the policy buyer"):
+        contract.rescind_pending_claim("job-1")
+
+    direct_vm.sender = direct_charlie
+    contract.rescind_pending_claim("job-1")
     assert contract.get_claim_status("job-1") == "unresolved"
+    assert contract.get_policy("job-1")["status"] == "active"
+    # Exposure stays locked (not released by rescind) -- expiry still works.
+    assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 10**18
+
+    # The buyer can file again -- the escrow slot is free (bond was returned).
+    direct_vm.warp(AFTER_DEADLINE)
+    direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")
+    assert contract.get_claim_status("job-1") == "pending"
+    contract.judge_claim("job-1")  # mocks still score 95 -> conforming -> rejected
+    assert contract.get_claim_status("job-1") == "rejected"
+
+
+def test_double_file_claim_blocked_while_pending(direct_vm, direct_deploy,
+                                                 direct_alice, direct_bob,
+                                                 direct_charlie):
+    """A second file_claim while the first judgement is pending reverts --
+    one escrow slot per policy."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    _judged_policy(direct_vm, contract, direct_charlie, direct_bob, "job-1")
+    contract.file_claim("job-1")
+    direct_vm.value = CLAIM_BOND
+    with direct_vm.expect_revert("already pending"):
+        contract.file_claim("job-1")
+    assert contract.get_claim_status("job-1") == "pending"
