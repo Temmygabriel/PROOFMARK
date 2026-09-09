@@ -9,6 +9,10 @@
 > verify-payments + seeded live board (2026-09-06). The Shape B pre-rename run
 > (37/37 on `0x589472da…`, 2026-09-06) is also recorded there. This page keeps the
 > outcome-detection write-up (§4) and the historical Shape A numbers.
+> **2026-09-08 (PAYOUT-FIX-20):** the canonical is now the **fixed** StudioNet deploy
+> `0x65319a27…` (external EthSend rail; pre-fix `0x850F…`/`0xA2aA…` superseded) — see
+> [../PROOFMARK_LIVE_EVIDENCE.md](../PROOFMARK_LIVE_EVIDENCE.md). Everything on this
+> page predates that fix and is kept as history.
 
 Harness: `e2e/run.js` + `e2e/roundtrip.js` (genlayer-js — the same SDK the
 frontend uses, chosen because the `genlayer` CLI cannot attach `value` to

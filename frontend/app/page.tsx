@@ -71,28 +71,30 @@ type FeedEntry = {
   ts: number;
 };
 
-// Canonical seeded StudioNet deployment only: on a brand-new browser (empty
-// localStorage), replay the REAL seed transactions from e2e/seed-live.js into
-// the feed so "Recent activity" matches the funded board a first-time reviewer
-// sees. Every entry below is a genuine finalized write on that contract --
-// register agent-live-1788864539810, the four LP deposits, the 1 GEN cover on
-// job-live-1788864539810, and the planted payout (same job, claimed + upheld
-// 2026-09-08) -- ids/amounts identical to the on-chain txs, stamped with the
-// actual seed-run time (the ids embed Date.now()). Any other network
-// or address keeps the feed local-only.
-const SEEDED_CONTRACT = "0x850f773bf5bb2bddb788896152c0a3c7c1c212b6";
-const SEED_TS = 1788864539810; // Date.now() when seed-live.js ran (2026-09-08)
+// Canonical seeded StudioNet deployment only (PAYOUT-FIX-20 fixed contract,
+// 2026-09-08): on a brand-new browser (empty localStorage), replay the REAL seed
+// transactions from e2e/demo-payout.js into the feed so "Recent activity" matches
+// the funded board a first-time reviewer sees. Every entry below is a genuine
+// finalized write on that contract -- register agent-live-1788895030112, the
+// four LP deposits, the 1 GEN cover on job-live-1788895030112, and the settled
+// payout (same job, claimed + upheld 2026-09-08; the file_claim's two child
+// transfers finalized as clean EthSend credits to the buyer EOA -- 1 GEN payout
+// + 2 GEN bond refund, NO Execution ERROR). ids/amounts identical to the on-chain
+// txs, stamped with the actual run time (the ids embed Date.now()). Any other
+// network or address keeps the feed local-only.
+const SEEDED_CONTRACT = "0x65319a2787be8a57ee570fd0eb61a69887d91099";
+const SEED_TS = 1788895030112; // Date.now() when demo-payout.js ran (2026-09-08)
 const SEED_ACTIVITY: FeedEntry[] = [
-  // Planted 2026-09-08 (same day, after the seed): the seeded job's deadline
-  // passed with nothing delivered; the deterministic auto-breach claim resolved
-  // upheld, so a finished payout now sits on the board (Unrated 9.06, lock 0).
-  { action: "verdict", jobId: "job-live-1788864539810", verdict: "upheld", ts: SEED_TS },
-  { action: "issue", jobId: "job-live-1788864539810", agentId: "agent-live-1788864539810", amount: "0.06 GEN", tier: "Unrated", ts: SEED_TS },
+  // Settled 2026-09-08: the job's deadline passed with nothing delivered; the
+  // deterministic auto-breach claim resolved upheld, so a finished payout sits
+  // on the board (Unrated 9.06, lock 0) -- paid over the external EthSend rail.
+  { action: "verdict", jobId: "job-live-1788895030112", verdict: "upheld", ts: SEED_TS },
+  { action: "issue", jobId: "job-live-1788895030112", agentId: "agent-live-1788895030112", amount: "0.06 GEN", tier: "Unrated", ts: SEED_TS },
   { action: "deposit", amount: "2 GEN", tier: "Gold", ts: SEED_TS },
   { action: "deposit", amount: "3 GEN", tier: "Silver", ts: SEED_TS },
   { action: "deposit", amount: "5 GEN", tier: "Bronze", ts: SEED_TS },
   { action: "deposit", amount: "10 GEN", tier: "Unrated", ts: SEED_TS },
-  { action: "register", agentId: "agent-live-1788864539810", ts: SEED_TS },
+  { action: "register", agentId: "agent-live-1788895030112", ts: SEED_TS },
 ];
 
 function readFeed(): FeedEntry[] {

@@ -17,6 +17,35 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **PAYOUT-FIX-20 — EOA payout bug found + fixed + re-proven live (2026-09-08, commit
+  `349e071`):** the user reported a demo payout "didn't happen, the buyer never got paid".
+  Ground truth: every Proofmark payee is a plain EOA wallet, but the money-out sites paid
+  through `gl.get_contract_at(payee).emit_transfer(...)`, which routes as an **IC-to-IC
+  `PostMessage`** — an empty/EOA address cannot receive it, so each transfer child
+  finalized with a **GenVM Execution ERROR** (value debited from the contract, wallet never
+  credited, not refunded on child failure). Confirmed against docs.genlayer.com + the
+  runtime's own gl_call classification, then fixed by converting all **six** money-out sites
+  to an **external `@gl.evm.contract_interface` `_EoaPay` handle** (overpayment refund,
+  premium refund, LP withdraw, claim payout, claim bond refund, pending-claim bond refund) →
+  runtime gl_call **`EthSend`**, which credits the EOA normally and executes on finality
+  (preserves the old `on="finalized"` reentrancy semantics). Regression test
+  `test_payouts_leave_over_external_ethsend_rail` (traces show `EthSend`, never
+  `PostMessage`); suite now **56/56**; `genvm-lint` clean. Regenerated the Bradbury minified
+  build (now **36,811 B**, sha `6d1cbe3f…`; canonical source now 72,965 B, sha `1b7b1cba…`).
+  **Live re-proof on the NEW StudioNet canonical `0x65319a2787BE8a57ee570fD0eB61A69887D91099`**
+  (`e2e/demo-payout.js` = the exact submission §05 path): register → fund 10/5/3/2 → issue
+  1 GEN @ 0.06 → accept → deadline passes → `file_claim` (2 GEN bond) → auto-breach upheld,
+  pool 10.06 → 9.06, locked → 0. The `file_claim` tx `0xdeec2cf1…1aed00` triggered **two
+  child transfers, both FINALIZED, contract → buyer EOA `0xd7d4dcab…` (1.000000 GEN payout +
+  2.000000 GEN bond refund), NO Execution ERROR** — the exact mechanism that errored on the
+  pre-fix rail. **Superseded:** the pre-fix StudioNet canonical `0x850F773B…` (its "settled
+  payout" moved only the pool ledger; the buyer EOA was never credited — corrected in
+  `docs/PROOFMARK_LIVE_EVIDENCE.md` residuals) and Bradbury `0xA2aA8451…`. Fresh fixed
+  Bradbury deploy (deploy-only, ~0.0049 GEN, 30.485816809 → 30.480955856):
+  **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** (tx `0xfd0b7d92…b02b`, `ACCEPTED`/`AGREE`,
+  read-verified pools 0). `e2e/demo-payout.js` + `e2e/results/probe-children.js` added;
+  frontend seed feed re-pointed at the new canonical (new agent/job ids). A generic explainer
+  for other GenLayer projects lives at project root: `genlayer-eoa-payout-path.md`.
 - **Bradbury: hardened Proofmark deployed (2026-09-08)** — the long-standing Bradbury
   residual is closed. The canonical `proofmark.py` (71,706 B) exceeds Bradbury's per-tx
   pubdata cap (`BlockPubdataLimitReached` — a **size** limit; confirmed NOT the v0.6/fee

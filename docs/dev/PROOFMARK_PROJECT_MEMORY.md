@@ -4,6 +4,24 @@ Local working notes. This file holds facts that are easy to lose between
 sessions: deployed addresses, network quirks, tooling gotchas, and the
 reasoning behind decisions. Update it whenever something notable changes.
 
+## PAYOUT-FIX-20 banner — EOA payouts now over the external EthSend rail (2026-09-08)
+
+**A real money bug was found + fixed + re-proven live (commit `349e071`).** Every
+payee is a plain EOA wallet, but money-out sites used `gl.get_contract_at(payee)
+.emit_transfer(...)` — the **IC-to-IC `PostMessage`** rail, which an empty/EOA address
+cannot receive → each transfer child finalized with a "GenVM Execution ERROR": value
+left the contract, wallet never credited. Fix: all **six** money-out sites pay through
+an external **`@gl.evm.contract_interface` `_EoaPay`** handle → runtime gl_call
+**`EthSend`** (credits the EOA; executes on finality, preserving `on="finalized"`
+reentrancy semantics). See `genlayer-eoa-payout-path.md` (project root) for the generic
+explanation to reuse in other GenLayer projects. **NEW addresses supersede everything
+below that says `0x850F…`/`0xA2aA…`:** StudioNet canonical **`0x65319a2787BE8a57ee570fD0eB61A69887D91099`**
+(§05 demo loop on-chain, `file_claim` children = FINALIZED EthSend credits to the buyer
+EOA, 1 + 2 GEN, no Execution ERROR — `e2e/results/demo-payout.log`) and Bradbury
+**`0xE76AF22aea26A84dB11e87FB946060B02F490217`** (deploy-only). The pre-fix `0x850F…`
+"settled payout" moved only the pool ledger; the EOA credit never happened — corrected
+in `docs/PROOFMARK_LIVE_EVIDENCE.md`.
+
 ## Rebrand banner — Proofmark (2026-09-06)
 
 Product rebranded to **Proofmark** across everything
@@ -93,19 +111,25 @@ is superseded by this doc for deploy decisions.
 
 ## Deployed contract addresses
 
-**Canonical — Proofmark, Phase-7b HARDENED artifact (`proofmark.py`, `class Proofmark`):**
-- **StudioNet (canonical LIVE — seeded board; `page.tsx` + Vercel env point at this):**
-  `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6` (deployed 2026-09-08 via `run.js deploy`).
-  - **Seeded board with a settled payout** (`e2e/results/seed-live-hardened.log` +
-    `plant-payout.log`): the seeded job `job-live-1788864539810` was claimed on
-    2026-09-08 (deterministic auto-breach, no deliverable) and resolved **upheld** —
-    the buyer was paid **exactly 1.000000 GEN** from the Unrated pool, the 2 GEN bond
-    refunded. Board re-read after settlement: Unrated **9.0600 / locked 0.0000**,
-    Bronze 5, Silver 3, Gold 2. Live agent `agent-live-1788864539810` (wallet in
-    `e2e/live-keys.json`). Every write finalized success.
-- **StudioNet (e2e evidence — pool intentionally drained by the run):**
-  `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` (deployed 2026-09-08, same hardened
-  working-tree source). **Full e2e 37/37 PASS** (`studionet.json` +
+**Canonical — Proofmark, FIXED artifact, PAYOUT-FIX-20 (`proofmark.py`, `class Proofmark`):**
+- **StudioNet (canonical LIVE — §05 demo loop + settled payout over the external EthSend rail; `page.tsx` + Vercel env point at this):**
+  `0x65319a2787BE8a57ee570fD0eB61A69887D91099` (deployed 2026-09-08 via `run.js deploy`).
+  - **§05 loop on it** (`e2e/results/demo-payout.log` + `demo-payout.json`): agent
+    `agent-live-1788895030112`, job `job-live-1788895030112` (1 GEN cover @ 0.06) —
+    register → fund 10/5/3/2 → issue → accept → deadline passed (nothing delivered) →
+    `file_claim` (2 GEN bond) resolved **upheld**; buyer paid **exactly 1.000000 GEN**
+    from the Unrated pool, the 2 GEN bond refunded. Board re-read after settlement:
+    Unrated **9.0600 / locked 0.0000**, Bronze 5, Silver 3, Gold 2. **Wallet-credit
+    proof:** the `file_claim` tx `0xdeec2cf1…1aed00` triggered **two children, both
+    FINALIZED, contract → buyer EOA `0xd7d4dcab…` (1 + 2 GEN), NO Execution ERROR** —
+    the external rail. Live wallet in `e2e/live-keys.json`.
+- **StudioNet (superseded pre-fix canonical, 2026-09-08):** `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
+  — ran the **pre-fix** code; its "settled payout" (seed-live + plant-payout logs)
+  moved only the pool ledger, the buyer EOA was **never credited** (children errored).
+  Do not point the frontend at it.
+- **StudioNet (e2e evidence — pre-fix, pool intentionally drained by the run):**
+  `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` (deployed 2026-09-08, same **pre-fix**
+  hardened working-tree source). **Full e2e 37/37 PASS** (`studionet.json` +
   `studionet-e2e-clean.log`): deposit credits pool 20; upheld auto-breach claim debits
   pool 20.12→19.12 **exactly 1 GEN**; full LP withdraw drains to 0.
   - Hardened deltas over the pre-hardening artifact: **evidence custody split** in
@@ -115,9 +139,9 @@ is superseded by this doc for deploy decisions.
     (permissionless `expire_pending_policy` past deadline+7d), and the GPT-audit
     **H-02** two-phase claims (FIX-19): payable `file_claim` is deterministic + escrows
     the bond, the nondet judgement runs in the non-payable `judge_claim`,
-    `rescind_pending_claim` recovers the bond. **55/55 direct tests green**;
-    `genvm-lint` clean. Frontend H-04 (positive success check) / M-01 (pending
-    lifecycle) fixes are in the same batch.
+    `rescind_pending_claim` recovers the bond. **56/56 direct tests green** (incl. the
+    `external_ethsend_rail` regression); `genvm-lint` clean. Frontend H-04 (positive
+    success check) / M-01 (pending lifecycle) fixes are in the same batch.
 - **StudioNet (superseded first hardened deploy):** `0x9fac0b43D5fcE76E6115dB91E0a7105D16218a82`
   (2026-09-07, tx `0x5b1a50…`; the first FIX-16/18 deploy — its e2e hit StudioNet RPC
   flakiness at 26/37; superseded by the 2026-09-08 fresh deploys above).
