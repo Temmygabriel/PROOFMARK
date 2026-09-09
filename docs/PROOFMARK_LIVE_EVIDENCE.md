@@ -5,86 +5,94 @@ Where the **Proofmark** contract (`intelligent-contracts/proofmark.py`,
 step evidence behind that claim. Historical runs are kept below for context; the
 **current canonical** is the Phase-7b hardened artifact at the top of this page.
 
-## Current canonical — Phase-7b hardened artifact (2026-09-08)
+## Current canonical — fixed Proofmark, PAYOUT-FIX-20 (2026-09-08)
 
-The hardened `proofmark.py` — the rebranded artifact plus the GPT-audit H-02
-two-phase-claim fix and the 2026-09-07 adversarial pass (evidence custody split,
+The fixed `proofmark.py` — the **PAYOUT-FIX-20 external-EthSend-rail fix** plus the
+Phase-7b hardening (GPT-audit H-02 two-phase-claim fix, evidence custody split,
 FIX-16 impossible-acceptance, FIX-18 forever-pending release; see
-[PROOFMARK_CONTRACT.md](PROOFMARK_CONTRACT.md) items 19–21) — is re-proven live on
-StudioNet by **two fresh deploys of the same working-tree source**:
+[PROOFMARK_CONTRACT.md](PROOFMARK_CONTRACT.md)) — is proven live on StudioNet by
+**one fresh deploy that carries the full §05 demo loop AND a settled payout whose
+EthSend children are verified**:
 
 | Address | Role | On-chain proof |
 |---------|------|----------------|
-| **`0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`** | **canonical live** — seeded board with a settled payout, the address the frontend/env points at | **seed-live** board below + the planted claim (`e2e/results/seed-live-hardened.log` + `plant-payout.log`) |
-| `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` | e2e evidence (pool intentionally drained by the run) | **37/37 e2e** (`e2e/results/studionet-e2e-clean.log` + `studionet.json`) |
+| **`0x65319a2787BE8a57ee570fD0eB61A69887D91099`** | **canonical live** — the address the frontend/env points at; funded board + a settled payout paid over the external rail | **§05 demo run** (`e2e/results/demo-payout.log` + `demo-payout.json`), 2026-09-08 |
 
-Both deployed by `node e2e/run.js deploy --network studionet` from the hardened
-working tree (2026-09-08). GenVM contracts are consensus-stored (`eth_getCode` is not
-applicable on StudioNet), so every finalized write tx in the two logs below — all on
-these addresses — is the proof the deployments executed.
+> **Why a new canonical (PAYOUT-FIX-20).** The prior canonical `0x850F773B…` ran
+> **pre-fix** code: its planted payout settled the *pool ledger* (Unrated 10.06 →
+> 9.06) but paid the buyer through an IC-to-IC `PostMessage` — and because the buyer
+> is a plain EOA (no intelligent contract deployed), each transfer child finalized
+> with a **"GenVM Execution ERROR"**: value left the contract but never reached the
+> wallet. That is exactly the bug PAYOUT-FIX-20 fixes (six money-out sites converted
+> to the external `@gl.evm.contract_interface` `_EoaPay` → **EthSend** rail; see the
+> module docstring / [PROOFMARK_CONTRACT.md](PROOFMARK_CONTRACT.md) item 22).
+> `0x850F…` is superseded — do not point the frontend at it.
 
-### Hardened 37/37 e2e highlights (`0x1FcE88…`)
+Deployed by `node e2e/run.js deploy --network studionet` from the fixed working
+tree (2026-09-08). GenVM contracts are consensus-stored (`eth_getCode` is not
+applicable on StudioNet), so every finalized write tx below — all on this address —
+is the proof the deployment executed.
 
-The full step log is `e2e/results/studionet-e2e-clean.log` (machine JSON
-`studionet.json` — every step carries its finalized tx hash). Representative steps
-and tx hashes:
+### §05 demo loop + EthSend payout proof (`0x65319a27…`)
 
-| Step | Result | Tx hash |
-|------|--------|---------|
-| `register(agent)` (agent binds to wallet) | ok | `0x3e94a803541fe0e9ede3d6f566ec1c1a930d25cbf3c967224f3ee6bc2317a582` |
-| register(2nd id) reverts (address bound) | revert | `0xea73a7e6f9359bb4c9c7c28d632f2d19559c2269bf61fd967605e495f8cc255e` |
-| LP deposit 20 GEN → pool | ok | `0xb2bf7f0b49db834c4a62cb4f1c7002e7438394e7748bec186ce92c75ea95efff` |
-| quote = unrated / 600 bps / 0.06 GEN premium | view | — |
-| issue job (payable premium) → policy `pending` | ok | `0x6d0ae1aca2c85f083cf06e00eda96960cd379039fe43bb7cb4261563f50e0bef` |
-| agent rejects pending → `expired`, premium refunded | ok | `0x643399d75194ed07769cb7450f52263650b2ab58b4c155247a9fbc0755e775da` |
-| accept pending → policy `active` | ok | `0x8a7b79f646263c045ba567d15982662e480bbb0b28a2e6c5bec9b357ace029b7` |
-| URL-shaped deliverable REVERTS (canonical CID only) | revert | `0x0833fc402099e5def16f0adbab5578a2f47ffd1504b4e52210e0069fc7b7b065` |
-| past-deadline issue reverts | revert | `0x886bde53472916deb8f5b71dfb5c750d7fe33b2db7b7a9e6086a6ed28f056848` |
-| premature claim reverts (pre-deadline, no deliverable) | revert | `0x0a70c56a402f9ce5495196d3d9480db8a784351e6272a1ba76a18a9b1d329a35` |
-| full LP withdraw under locked exposure reverts | revert | `0x4b14dd7d01ef92f8e08bff0fe1f180ee66950108c7cb04ca1f44ac20603ca310` |
-| post-deadline submit reverts (deliverable frozen) | revert | `0x52d3b867fca9906e3f2639ef6f1ea00959ba4b767fc7c625f4cb29b290f09ab7` |
-| buyer expires job (deadline passed) → `expired` | ok | `0xe9c6912592015f890f7604ac6cb0c26fd3568b3f0b135341c99941b75fab6f6b` |
-| `file_claim` after deadline → **auto-breach**, claim `upheld` | ok | `0xdd2db78b0b09200889d8b4249345679587b96a83a4ba96e469e4800b507c1b3c` |
-| policy → `claimed`; pool **paid coverage** (20.12 → 19.12 GEN), exposure released | ok | see log |
-| agent claim counters `filed=1 upheld=1` | ok | see log |
-| LP withdraws everything → pool drained to 0 | ok | `0xd8103f0b1804769c7f059bef348ce969bc5d6026fc201cf571891000432f5ed0` |
+Written by `node e2e/demo-payout.js` — the reviewer's exact path (submission note
+§05): register agent → LP funds Unrated 10 (+ Bronze 5 / Silver 3 / Gold 2) → issue
+1 GEN cover @ 0.06 premium, short deadline, CID spec → accept → deadline passes with
+nothing delivered → `file_claim` (2 GEN bond) → deterministic auto-breach. Every
+write finalized success; board re-read live from the contract. Agent
+`agent-live-1788895030112` (wallet in `e2e/live-keys.json`), job
+`job-live-1788895030112`.
 
-The money-relevant rows (deposit credits the pool, an upheld claim debits it
-**exactly 1.000000 GEN**, the full withdrawal releases the rest) are the pool-ledger
-half of "GEN actually moved". The wallet-credit half (Mode B) is only enforceable on
-a balance-mirroring network — see [Residuals](#residuals).
-
-### Hardened seeded live board (`0x850F773B…`) — a real payout now settled on it
-
-Written by `node e2e/seed-live.js`; every write finalized success, board re-read back
-live from the contract. Agent `agent-live-1788864539810` (wallet in
-`e2e/live-keys.json`), job `job-live-1788864539810` (1 GEN cover). On 2026-09-08 the
-seeded job's deadline passed with nothing delivered and the deterministic auto-breach
-claim was filed against it (`e2e/results/plant-payout.log`): claim **upheld**, the
-buyer paid **exactly 1.000000 GEN** from the Unrated pool, the 2 GEN bond refunded.
-Board re-read directly from the contract after settlement:
+After the deadline passed with no deliverable, the claim resolved **upheld**: policy
+`claimed`, buyer paid **exactly 1.000000 GEN** from the Unrated pool, the 2 GEN bond
+refunded. Board re-read directly from the contract after settlement:
 
 | Tier | Pool | Locked | Jobs |
 |------|------|--------|-----------|
-| unrated | 9.0600 GEN | 0.0000 GEN | 1 settled payout: `job-live-1788864539810` (1 GEN covered, NOT DELIVERED) |
+| unrated | 9.0600 GEN | 0.0000 GEN | 1 settled payout: `job-live-1788895030112` (1 GEN covered, NOT DELIVERED) |
 | bronze | 5.0000 GEN | — | — |
 | silver | 3.0000 GEN | — | — |
 | gold | 2.0000 GEN | — | — |
 | penalty | 0 | — | — |
 
-Seed txs (all `[PASS]`, `e2e/results/seed-live-hardened.log`): register
-`0x95646645…98e3aba`, deposits `0x0718b1ec…2a0d0ed` (unrated 10) /
-`0xe4671e06…2b2e562` (bronze 5) / `0x18100fc9…459f1f2a` (silver 3) /
-`0x15a5672c…39d6c569c` (gold 2), issue `0xac5297d9…3950b244`, accept
-`0x261e5ae7…4bd2a728`. Settlement proof is the post-claim state read
-(`get_policy` status `claimed`, `get_claim_status` `upheld`, pool 10.0600 → 9.0600,
-locked 1.0000 → 0.0000) and the finalized claim on the contract's explorer history —
-the exact "coverage paid" row a reviewer looks up in the submission's Step 2.
+**The wallet-credit proof (StudioNet's best).** The `file_claim` tx
+`0xdeec2cf17c598a770ee272d5f9405dd84e2e4f11498272acd1b30f00da1aed00` triggered **two
+child transactions, both FINALIZED, both from the contract `0x65319a27…` → the buyer
+EOA `0xd7d4dcab3cc4bab91f7c77df38a50c98461dd1f7`**, carrying **1.000000 GEN** (the
+payout) and **2.000000 GEN** (the bond refund) — **no Execution ERROR** on either.
+This is the exact mechanism that failed on the pre-fix contract, where the same
+children finalized with a "GenVM Execution ERROR". The external **EthSend** rail is
+independently pinned by the direct-mode regression test
+`test_payouts_leave_over_external_ethsend_rail` (the run's traces show `EthSend`,
+never `PostMessage`).
+
+Demo txs (all `[PASS]`, `e2e/results/demo-payout.log`): register
+`0xdbea899cebadb59e8b9ab42697ea1f55c0ad152a86cd7ea2f43bdfd6a8ca1a6d`, deposits
+`0x22e25f1583264e876115de35ccbf23cac175901bc7501688af1ada67b3e56b84` (unrated 10) /
+`0x0a24075581505bcee11282259e5fac7f28cf64e5ca7033688644801fcc9f02fa` (bronze 5) /
+`0x1ad4315736e19101dcd26f631ec63ee6eda2045fd713cb5dae0a7086a9e9d10a` (silver 3) /
+`0x4d6df5c43a5a0b34b91f2d9c5f827dc33447471e9749c98a5a65343049eeeba4` (gold 2), issue
+`0x26ab2637c1f6cabdd1827ee833cbf87ab789207a8afc4f2ded64b8fdf11b53b8`, accept
+`0xd574fa1127ede36c3640f500d948d00f79c42e4f113b52f3deaff865edb8107a`,
+file_claim `0xdeec2cf17c598a770ee272d5f9405dd84e2e4f11498272acd1b30f00da1aed00`.
+
+### Superseded pre-fix evidence (kept for context)
+
+The 2026-09-08 **hardened (pre-fix)** deploys `0x850F773B…` (seeded board + planted
+claim, `e2e/results/seed-live-hardened.log` + `plant-payout.log`) and `0x1FcE88…`
+(37/37 e2e, `e2e/results/studionet-e2e-clean.log`) ran code **before PAYOUT-FIX-20**.
+Their pool-ledger money movement (deposit credits, an upheld claim debiting **exactly
+1.000000 GEN**, withdraw to 0) is genuine and still demonstrates the ledger half of
+the conservation — but their payouts went over the IC-to-IC rail and therefore did
+**not** credit the EOA buyer wallets (children finalized "GenVM Execution ERROR").
+They are superseded by `0x65319a27…`, whose payout children are clean EthSend
+credits (above).
 
 ### Direct-mode suite (2026-09-08)
 
-`python -m pytest tests/direct/ -q` → **55 passed** (the current suite, including the
-H-02 two-phase and Phase-7b regression tests). `genvm-lint check` clean.
+`python -m pytest tests/direct/ -q` → **56 passed** (the current suite, including the
+H-02 two-phase and Phase-7b regression tests and the PAYOUT-FIX-20
+`test_payouts_leave_over_external_ethsend_rail`). `genvm-lint check` clean.
 
 ## Pre-hardening canonical — rebranded artifact (2026-09-06, superseded)
 
@@ -107,33 +115,34 @@ board (`studionet-seed-live.log`, agent `agent-live-1788715641710`, job
 predates the hardening; the hardened contract's pool-ledger money movement is
 re-proven by the 37/37 table above.
 
-## Bradbury: hardened Proofmark deployed (2026-09-08)
+## Bradbury: fixed Proofmark deployed (2026-09-08)
 
 Scope for Bradbury is deploy-only (no e2e — StudioNet carries the full scenario). The
-hardened Proofmark is now live on Bradbury from a **minified build** that fits the pubdata
-cap while preserving behavior exactly:
+fixed Proofmark (PAYOUT-FIX-20) is live on Bradbury from a **minified build** that fits
+the pubdata cap while preserving behavior exactly:
 
-- **Deploy tx:** `0x88a465db5ca32db3c974ff719a6ab0646a9041d991542c43c84ce0ec99656169` — status
+- **Deploy tx:** `0xfd0b7d926bf57914193aab7b07bc56a2d7a679e3ee1b0a0771127e6c8962b02b` — status
   `ACCEPTED` / result `AGREE`, CLI `✔ Contract deployed successfully` (exit 0).
-- **Contract:** `0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd` — **read-verified** 2026-09-08:
-  `get_pool_info` across `unrated`/`bronze`/`silver`/`gold` all return fresh pools
+- **Contract:** `0xE76AF22aea26A84dB11e87FB946060B02F490217` — **read-verified** 2026-09-08:
+  `get_pool_info` across `unrated`/`bronze`/`silver`/`gold`/`penalty` all return fresh pools
   (`balance_atto:0`, `total_shares:0`), confirming the class + ABI decoded and executed.
-- **Artifact:** `intelligent-contracts/proofmark-bradbury.py`, **36,902 B** — produced by
+- **Artifact:** `intelligent-contracts/proofmark-bradbury.py`, **36,811 B** — produced by
   `e2e/minify_contract.py` from the canonical `intelligent-contracts/proofmark.py`
-  (71,706 B, sha256 `2b679f5292e34bff`). The minifier removes only full-line/trailing
+  (72,965 B, sha256 `1b7b1cba2223ff42f5d9628dbc38c9079366807ebe0c6224d3f4201b3eb6356f`). The minifier removes only full-line/trailing
   comments, blank lines and standalone-string (docstring) expressions and enforces, per
   run: `ast.parse` clean + **code-token identity** with the source + fixed-point. The build
-  is `genvm-lint` clean (`Proofmark`, 20 methods) and the **55/55 direct tests pass against
+  is `genvm-lint` clean (`Proofmark`, 20 methods) and the **56/56 direct tests pass against
   it** — so it is behaviorally identical to the canonical StudioNet artifact, unlike the
   old comment-trim-only idea this section previously rejected (a 57.9 KB trim was still over
   the cap; the docstring-stripping minifier is what fits).
-- **Why the canonical source can't deploy to Bradbury:** the 71.7 KB source exceeds
+- **Why the canonical source can't deploy to Bradbury:** the 72,965 B source exceeds
   Bradbury's per-tx pubdata cap (`BlockPubdataLimitReached`; largest known-good ~39,869 B).
   This is a **size** limit, not the v0.6/fee migration — per the consensus-v0.6 doc,
   Bradbury is not yet on the v0.6 stack.
-- **Historical superseded:** `0x79C15889D5070321176994373C440778a9eC47c1` (Shape A,
-  2026-09-03) and the earlier blocked attempts (incl. one ~0.0014 GEN revert). Total spent
-  on the successful deploy run ~0.0081 GEN (30.493878 → 30.485817).
+- **Historical superseded:** `0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd` (pre-fix minified,
+  2026-09-08, tx `0x88a465…`) and `0x79C15889D5070321176994373C440778a9eC47c1` (Shape A,
+  2026-09-03) and the earlier blocked attempts (incl. one ~0.0014 GEN revert). The 2026-09-08
+  deploy spent ~0.0049 GEN (30.485816809 → 30.480955856); prior run spend ~0.0081 GEN.
 
 ## Historical runs (pre-hardening, kept for context)
 
@@ -149,31 +158,41 @@ the unpatched source.
 
 ## Residuals
 
-1. **Wallet-credit (Mode B) proof is unprovable on StudioNet** — StudioNet does not
-   mirror account balances (`getBalance` reads 0.000000 for every wallet), so the
-   "recipient wallet actually rose" assertion can only be a wallet-credit check on a
-   balance-enforcing network. The pool-ledger conservation half — deposit credits,
-   payout debits **exactly** the coverage, exposure releases — is proven live by the
-   37/37 table above. The hardened Proofmark is now on Bradbury (`0xA2aA…`, minified
-   build) which *would* host a value run, but Bradbury carries scarce testnet funds and
-   a value run needs funding ~43 GEN across roles; it stays a documented residual unless
-   the user opts to fund it.
-2. **(Resolved 2026-09-08)** Bradbury Proofmark fresh deploy — was blocked by
-   `BlockPubdataLimitReached` on the 71.7 KB source; closed by the minified build
-   `intelligent-contracts/proofmark-bradbury.py` (36,902 B) → hardened Proofmark live at
-   `0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`. See the Bradbury section above.
-3. **Live judged (V3) claim** — skipped: the evidence gateway `https://w3s.link/ipfs/`
+1. **EOA balance-credit is not directly readable on StudioNet** — StudioNet does not
+   mirror account balances (`getBalance` reads 0.000000 for every wallet), so a literal
+   "recipient wallet rose" read is impossible there. What the current canonical
+   **does** prove is one layer deeper than the old pool-ledger-only evidence: the
+   payout/refund children of `file_claim`
+   (`0xdeec2cf1…1aed00`) are **FINALIZED transfers from the contract to the buyer EOA
+   over the external EthSend rail — exact amounts, no Execution ERROR** (see above),
+   the identical mechanism that failed on the pre-fix rail. A wallet-balance assertion
+   still needs a balance-enforcing network: the fixed Proofmark is deployed on Bradbury
+   (`0xE76AF22a…`, minified build) which *would* host a value run, but Bradbury carries
+   scarce testnet funds and a value run needs funding ~43 GEN across roles; it stays a
+   documented residual unless the user opts to fund it.
+2. **(Resolved 2026-09-08, updated for the fix)** Bradbury Proofmark — the pre-fix
+   minified deploy (`0xA2aA…`) is superseded by the **fixed** minified build
+   `intelligent-contracts/proofmark-bradbury.py` (**36,811 B**) deployed to
+   `0xE76AF22aea26A84dB11e87FB946060B02F490217`. See the Bradbury section above.
+3. **(Honest correction, 2026-09-08)** the superseded pre-fix canonical `0x850F…`
+   (and Bradbury `0xA2aA…`) reported a "settled payout" that only moved the **pool
+   ledger** — the buyer EOA was never credited, because the IC-to-IC rail cannot
+   deliver to an empty address (children finalized "GenVM Execution ERROR"). That is
+   the very bug PAYOUT-FIX-20 fixes; the current canonical's payout children are clean
+   EthSend credits. Prior docs' "buyer paid 1 GEN" phrasing on `0x850F…` referred to
+   the ledger move only and is corrected here.
+4. **Live judged (V3) claim** — skipped: the evidence gateway `https://w3s.link/ipfs/`
    does not resolve the pinned CIDs from this network (gateway migration: 403/429/504;
    alternate gateways unreachable). The judged bond path (incl. the H-02 two-phase
-   split) is proven in direct-mode tests (**55/55** in `tests/direct/`) and the live
-   deterministic auto-breach payout (37/37 above).
+   split) is proven in direct-mode tests (**56/56** in `tests/direct/`) and the live
+   deterministic auto-breach payout (the §05 loop above).
 
 ## Re-verify in one command
 
 ```bash
-# Reproduce the hardened proof from scratch (StudioNet, gasless): deploy a fresh
-# contract from the working tree, then run the full e2e against it automatically.
-cd e2e && node run.js deploy --network studionet && node run.js e2e --network studionet
-# Then seed a fresh live board on a second fresh deploy:
-node run.js deploy --network studionet && node seed-live.js
+# Reproduce the fixed proof from scratch (StudioNet, gasless): deploy a fresh
+# contract from the working tree, then run the full §05 demo loop against it
+# (register -> fund -> issue -> accept -> deadline -> file_claim payout, incl.
+# the child-transfer check) automatically.
+cd e2e && node run.js deploy --network studionet && node demo-payout.js
 ```

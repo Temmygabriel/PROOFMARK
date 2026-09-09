@@ -32,13 +32,13 @@ const CONTRACT_PATH = path.join(__dirname, "..", "intelligent-contracts", "proof
 const NETS = {
   studionet: {
     label: "StudioNet",
-    address: "0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6", // Proofmark Phase-7b hardened canonical, seeded live board (2026-09-08); e2e 37/37 on 0x1FcE88 (same artifact, pool drained)
+    address: "0x65319a2787BE8a57ee570fD0eB61A69887D91099", // Proofmark canonical, PAYOUT-FIX-20 external EthSend rail (2026-09-08). §05 demo loop register->payout settled on it; file_claim children are clean EthSend credits to the buyer EOA (1 + 2 GEN, FINALIZED, no Execution ERROR) -- e2e/results/demo-payout.log. Supersedes 0x850F (pre-fix rail: its "settled payout" debited the pool but never EOA-credited the buyer).
     chain: studionet,
     needsFunding: false,
   },
   bradbury: {
     label: "Bradbury",
-    address: "0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd", // Hardened Proofmark, DEPLOYED 2026-09-08 from intelligent-contracts/proofmark-bradbury.py (36,902 B minified build -- canonical 71.7 KB source exceeds Bradbury's BlockPubdataLimitReached pubdata cap). tx 0x88a465db5ca32db3c974ff719a6ab0646a9041d991542c43c84ce0ec99656169. Read-verified get_pool_info 4 tiers = 0. Minifier + equivalence gates: e2e/minify_contract.py; genvm-lint clean; 55/55 direct tests green against the build.
+    address: "0xE76AF22aea26A84dB11e87FB946060B02F490217", // Fixed Proofmark (PAYOUT-FIX-20), DEPLOYED 2026-09-08 from intelligent-contracts/proofmark-bradbury.py (36,811 B minified build -- canonical source exceeds Bradbury's BlockPubdataLimitReached pubdata cap). Deploy tx 0xfd0b7d926bf57914193aab7b07bc56a2d7a679e3ee1b0a0771127e6c8962b02b. Read-verified get_pool_info all tiers = 0. Minifier + equivalence gates: e2e/minify_contract.py; genvm-lint clean; 56/56 direct tests green against the build. Supersedes 0xA2aA (pre-fix artifact).
     chain: testnetBradbury,
     needsFunding: true,
   },

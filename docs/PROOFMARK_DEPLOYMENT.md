@@ -7,32 +7,37 @@ deployment actually succeeded.
 
 | Network | Chain ID | Contract address | Deployed | E2E verified |
 |---------|----------|------------------|----------|--------------|
-| **StudioNet** | 61999 | **`0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`** | 2026-09-08 | ✅ **37/37 steps** (on `0x1FcE88…`, same hardened artifact) + **seeded live board** on this address — see [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) |
-| Testnet Bradbury | 4221 | **`0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`** | 2026-09-08 | deploy-only read-verified — **hardened Proofmark** from a minified build (see note) |
+| **StudioNet** | 61999 | **`0x65319a2787BE8a57ee570fD0eB61A69887D91099`** | 2026-09-08 | ✅ **PAYOUT-FIX-20** — full §05 demo loop register→fund→issue→accept→deadline→file_claim payout on-chain; the claim's **two child transfers are clean EthSend credits to the buyer EOA (1.000000 + 2.000000 GEN), FINALIZED, no Execution ERROR** (`e2e/results/demo-payout.log`) — see [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) |
+| Testnet Bradbury | 4221 | **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** | 2026-09-08 | deploy-only read-verified — **fixed Proofmark** from a minified build (see note) |
 
-> The **canonical** StudioNet address above is the **Phase-7b hardened** Proofmark
-> contract — deployed 2026-09-08 from `intelligent-contracts/proofmark.py`
-> (`class Proofmark`; the rebranded artifact + GPT-audit H-02 two-phase claims + the
-> 2026-09-07 adversarial pass: evidence custody split, FIX-16, FIX-18). Two fresh
-> deploys of the same working-tree source carry the proof: a **37/37 full e2e** on
-> `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` (pool intentionally drained by the run)
-> and this **seeded live board** (`0x850F773B…`, `e2e/results/seed-live-hardened.log`).
-> Full evidence in [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md).
+> The **canonical** StudioNet address above is the **fixed Proofmark** contract
+> (PAYOUT-FIX-20 + the Phase-7b hardening), deployed 2026-09-08 from
+> `intelligent-contracts/proofmark.py` (`class Proofmark`). **PAYOUT-FIX-20** is a
+> correctness fix, not hardening: every payee is a plain EOA, so the six money-out
+> sites now pay over the **external `@gl.evm.contract_interface` (`_EoaPay`) →
+> EthSend** rail (an IC-to-IC `PostMessage` to an empty address finalizes its child
+> with a "GenVM Execution ERROR" — value debited, wallet never credited). The demo
+> run on this address proves it live: `e2e/results/demo-payout.log`. Full evidence in
+> [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md).
 >
-> **Bradbury note (resolved 2026-09-08):** the canonical `proofmark.py` (71.7 KB) exceeds
+> **Superseded canonical (2026-09-08):** `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
+> ran the **pre-fix** code — its "settled payout" moved the pool ledger but never
+> EOA-credited the buyer. Replaced by `0x65319a27…`.
+>
+> **Bradbury note (resolved 2026-09-08):** the canonical `proofmark.py` (72,965 B) exceeds
 > Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest known-good
-> ~39,869 B), which long blocked a fresh deploy. The hardened Proofmark is now live on
-> Bradbury from a **minified build** — `intelligent-contracts/proofmark-bradbury.py`, **36,902 B** (strips
+> ~39,869 B), which long blocked a fresh deploy. The fixed Proofmark is now live on
+> Bradbury from a **minified build** — `intelligent-contracts/proofmark-bradbury.py`, **36,811 B** (strips
 > only full-line comments / trailing comments / blank lines / docstrings, never any code or
 > string-literal byte). Equivalence is machine-checked by `e2e/minify_contract.py`
 > (code-token identity + ast.parse + fixed-point gates), `genvm-lint check` is clean
-> (`Proofmark`, 20 methods), and the **55/55 direct tests pass against the build** — so the
+> (`Proofmark`, 20 methods), and the **56/56 direct tests pass against the build** — so the
 > Bradbury bytecode is behaviorally identical to the canonical StudioNet artifact
-> (`0x850F773B…`, source sha256 `2b679f5292e34bff`). The old pre-rename Shape A deploy
-> `0x79C15889D5070321176994373C440778a9eC47c1` (2026-09-03) is superseded; the fresh
-> deploy is **`0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`** (tx
-> `0x88a465db5ca32db3c974ff719a6ab0646a9041d991542c43c84ce0ec99656169`, `ACCEPTED`/`AGREE`,
-> read-verified `get_pool_info` across tiers).
+> (`0x65319a27…`, source sha256 `1b7b1cba2223ff42f5d9628dbc38c9079366807ebe0c6224d3f4201b3eb6356f`).
+> The deploy is **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** (tx
+> `0xfd0b7d926bf57914193aab7b07bc56a2d7a679e3ee1b0a0771127e6c8962b02b`, `ACCEPTED`/`AGREE`,
+> read-verified `get_pool_info` across tiers). Superseded: `0xA2aA8451…` (pre-fix
+> minified, 2026-09-08) and the pre-rename Shape A `0x79C15889…` (2026-09-03).
 
 - Deploy account (`default`): `0xa881365a99d77be904e414ae610e22938bb0466d`
 - The hardened **37-step run** exercised register, LP deposit, quoting, 3× payable
@@ -51,26 +56,26 @@ deployment actually succeeded.
 
 ### Explorer links
 
-- StudioNet: `https://explorer-studio.genlayer.com/address/0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
+- StudioNet: `https://explorer-studio.genlayer.com/address/0x65319a2787BE8a57ee570fD0eB61A69887D91099`
 - Bradbury:
-  `https://explorer-bradbury.genlayer.com/address/0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd`
+  `https://explorer-bradbury.genlayer.com/address/0xE76AF22aea26A84dB11e87FB946060B02F490217`
 
 ## Frontend environment variables
 
 The Next.js frontend reads these at build time (set them in Vercel). The live
-Vercel deployment points at **StudioNet** (gasless) — set the **hardened canonical**
-address:
+Vercel deployment points at **StudioNet** (gasless) — set the **fixed** canonical
+address (the reviewer-facing env must be flipped to `0x65319a27…`):
 
 ```env
-NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6
+NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x65319a2787BE8a57ee570fD0eB61A69887D91099
 NEXT_PUBLIC_PROOFMARK_NETWORK=studionet
 ```
 
 If you'd rather run the frontend against **Bradbury** (no rate limits), you can swap in its
-deployment — it now runs the **hardened Proofmark** (minified build, see the note above):
+deployment — it now runs the **fixed Proofmark** (minified build, see the note above):
 
 ```env
-NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd
+NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0xE76AF22aea26A84dB11e87FB946060B02F490217
 NEXT_PUBLIC_PROOFMARK_NETWORK=testnet-bradbury
 ```
 

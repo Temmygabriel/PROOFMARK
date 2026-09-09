@@ -13,16 +13,23 @@ only comments/blanks/docstrings and verifies code-token identity — see the tab
 
 | Network | Address | Verified |
 |---|---|---|
-| **StudioNet** (61999) | `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6` | ✅ **37/37** e2e (on `0x1FcE88…`, same hardened artifact) + **seeded live board** (2026-09-08) |
-| **Testnet Bradbury** (4221) | `0xA2aA845152CC493D9EfD48E967d8d1789DDa1ccd` | deploy-only read-verified — **hardened Proofmark, minified build** (2026-09-08, tx `0x88a465…`); behaviorally identical to StudioNet source (55/55 direct tests + genvm-lint on the build) |
+| **StudioNet** (61999) | **`0x65319a2787BE8a57ee570fD0eB61A69887D91099`** | ✅ **PAYOUT-FIX-20** — full §05 loop register→fund→issue→accept→deadline→**file_claim payout** on-chain; the claim's **two child transfers are clean EthSend credits to the buyer EOA (1.000000 + 2.000000 GEN), FINALIZED, no Execution ERROR** (`e2e/results/demo-payout.log`, 2026-09-08). **56/56** direct tests |
+| **Testnet Bradbury** (4221) | **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** | deploy-only read-verified — **fixed Proofmark, minified build** (2026-09-08, tx `0xfd0b7d92…`); behaviorally identical to StudioNet source (56/56 direct tests + genvm-lint on the build) |
 
-> **Current artifact (2026-09-08):** the contract source is `proofmark.py` (`class
-> Proofmark`) with the **Phase-7b hardening** — the GPT-audit H-02 two-phase-claim fix
-> plus the 2026-09-07 adversarial pass (evidence custody split, FIX-16 impossible
-> acceptance, FIX-18 forever-pending release). Two fresh StudioNet deploys of the same
-> working-tree source carry the live proof: a **37/37 full e2e** on
-> `0x1FcE880D9fabDEc1Fa883FA3d2CD0685607379f7` and the **seeded live board** on
-> `0x850F773B…` (agent `agent-live-1788864539810` / job `job-live-1788864539810`).
+> **Current artifact (2026-09-08):** `proofmark.py` (`class Proofmark`) with the
+> **PAYOUT-FIX-20** external-value-rail fix plus the Phase-7b hardening (GPT-audit
+> H-02 two-phase-claim fix, evidence custody split, FIX-16 impossible acceptance,
+> FIX-18 forever-pending release). PAYOUT-FIX-20 is a **correctness bug-fix, not a
+> hardening change**: every payee is a plain EOA wallet, so value now leaves over the
+> **external `@gl.evm.contract_interface` (`_EoaPay`) → EthSend** rail instead of the
+> IC-to-IC `PostMessage` rail — an IC-to-IC transfer to an empty address finalized
+> with a child "GenVM Execution ERROR" (value debited from the contract but never
+> credited to the wallet). Six money-out sites converted (overpayment refund, premium
+> refund, LP withdraw, claim payout, claim bond refund, pending-claim bond refund);
+> the payout/refund children of a real claim now finalize as clean EthSend credits.
+> The **56/56 direct suite** (incl. the `…external_ethsend_rail` regression test) and
+> `genvm-lint` are green against the canonical source **and** the minified build.
+> See `docs/PROOFMARK_LIVE_EVIDENCE.md`.
 >
 > **Rebrand outcome (2026-09-06, superseded):** the rename to `proofmark.py` /
 > `class Proofmark` was a new deploy artifact; the pre-hardening rebranded contract
@@ -30,14 +37,20 @@ only comments/blanks/docstrings and verifies code-token identity — see the tab
 > re-proof above. The prior Shape B deploy (`0x589472da571Db60151100b153D65a7170367E17D`,
 > StudioNet e2e **37/37** PASS on 2026-09-06) is the **historical pre-rename validation**.
 >
-> **Bradbury (resolved 2026-09-08):** a fresh deploy of the 71.7 KB source was blocked by
+> **Superseded canonical (2026-09-08):** `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
+> ran the **pre-fix** code — its "settled payout" debited the pool ledger but never
+> EOA-credited the buyer (the very bug PAYOUT-FIX-20 fixes). Replaced by
+> `0x65319a27…`. Similarly Bradbury `0xA2aA8451…` (pre-fix, minified) is superseded
+> by `0xE76AF22a…`.
+>
+> **Bradbury (resolved 2026-09-08):** a fresh deploy of the 72,965 B source is blocked by
 > Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest known-good
-> ~39,869 B). The hardened Proofmark is now live on Bradbury from a **minified build**,
-> `intelligent-contracts/proofmark-bradbury.py` (**36,902 B**). The minifier removes only full-line /
+> ~39,869 B). The fixed Proofmark is live on Bradbury from a **minified build**,
+> `intelligent-contracts/proofmark-bradbury.py` (**36,811 B**). The minifier removes only full-line /
 > trailing comments, blank lines and docstrings; every run self-verifies `ast.parse`
 > clean + **code-token identity** with the source, and the build passes `genvm-lint check`
-> and the **55/55 direct tests** — so the deployed bytecode is behaviorally identical to
-> the canonical StudioNet artifact (source sha256 `2b679f5292e34bff`). The prior pre-rename
+> and the **56/56 direct tests** — so the deployed bytecode is behaviorally identical to
+> the canonical StudioNet artifact (source sha256 `1b7b1cba2223ff42f5d9628dbc38c9079366807ebe0c6224d3f4201b3eb6356f`). The prior pre-rename
 > Shape A deploy `0x79C15889D5070321176994373C440778a9eC47c1` (2026-09-03) is superseded.
 
 Full evidence, prior deployments, and re-deploy steps live in
