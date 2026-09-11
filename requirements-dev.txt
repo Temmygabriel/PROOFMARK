@@ -1,0 +1,25 @@
+# Pinned test/dev toolchain for the Proofmark intelligent contract.
+#
+# Review item 11: the direct-mode suite must be reproducible from a clean
+# checkout, so these are exact pins rather than ranges -- the contract's
+# consensus behaviour and the linter's AST rules both move between releases.
+#
+#   python -m pip install -r requirements-dev.txt
+#   python -m pytest tests/direct/ -v
+#   python -m genvm_linter.cli check intelligent-contracts/proofmark.py
+#
+# Verified on CPython 3.14.3 / Windows 11 with these exact versions:
+genlayer-test==0.29.2
+genvm-linter==0.10.0
+pytest==9.1.1
+
+# NOTE (Windows): genlayer-test 0.29.2 resolves and loads the contract under
+# test via importlib with a single-contract-per-module guard. Two consequences
+# the suite is written around, documented here so a future contributor doesn't
+# rediscover them the hard way:
+#   1. Deploying the same .py file twice inside ONE test fails with
+#      "only one contract is allowed". Give each scenario its own test function
+#      (or its own contract file) rather than two direct_deploy calls in one.
+#   2. direct_vm.mock_web keeps the FIRST registration for a matching URL;
+#      call direct_vm.clear_mocks() before re-registering the same CID with
+#      different bytes.

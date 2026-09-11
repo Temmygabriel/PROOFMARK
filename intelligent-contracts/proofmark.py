@@ -192,6 +192,8 @@ and documented here instead of hidden.
 
 from genlayer import *
 from dataclasses import dataclass
+import base64
+import hashlib
 
 ERROR_EXPECTED = "[EXPECTED]"
 ERROR_EXTERNAL = "[EXTERNAL]"
@@ -236,14 +238,16 @@ STATUS_EXPIRED = "expired"
 CLAIM_BOND_ATTO = 2 * 10**18
 BREACH_THRESHOLD = 40
 SCORE_TOLERANCE = 15
-MAX_PAYOUT_BPS_OF_POOL = 1000  # 10% of that tier's pool per single claim
-# A single policy's coverage is capped to the same 10% of the tier pool that a
-# single claim can ever pay. Buying "coverage" the contract can't pay in full
-# is a trap for honest buyers (cover 20 GEN, get paid at most 2); the label on
-# a policy must equal what a claim against it can actually collect. It also
-# caps the per-policy extraction a manufactured auto-breach can move in one
-# round to that same 10%-of-pool share.
-MAX_COVERAGE_BPS_OF_POOL = MAX_PAYOUT_BPS_OF_POOL
+# FIX-21: one policy's coverage is capped at 10% of the tier pool at issue.
+# This is the ONLY per-claim share, and it is an ISSUE-TIME cap, not a
+# settlement-time one -- _resolve_claim pays coverage_atto in full (the label
+# on a policy equals what a claim against it collects, always). The 50%
+# aggregate utilization cap plus withdraw's locked-exposure floor are what
+# guarantee the tier ledger can always fund that full payout.
+MAX_COVERAGE_BPS_OF_POOL = 1000
+# The share of a tier's pool that a single winning claim can move, kept as a
+# named constant for the docs and the invariant test.
+MAX_PAYOUT_BPS_OF_POOL = MAX_COVERAGE_BPS_OF_POOL
 # A deadline must give the agent a real window to deliver before a no-deliverable
 # auto-breach claim is possible. Without a floor, a self-dealing round could
 # run on ~1-second deadlines -- the drain becomes a fast loop instead of a
@@ -275,9 +279,28 @@ MIN_TENURE_DAYS_BY_TIER = {
     TIER_GOLD: 45,
 }
 
-# Content-addressed evidence gateway. spec_hash / deliverable_hash must
-# resolve to the exact same immutable bytes for every validator.
-EVIDENCE_GATEWAY = "https://w3s.link/ipfs/"
+# Content-addressed evidence gateways, tried in this fixed order (FIX-21).
+# spec_hash / deliverable_hash must resolve to the exact same immutable bytes
+# for every validator; the CID digest check below (_fetch_verified) is what
+# makes a multi-gateway fan-out safe -- a gateway returning the wrong bytes is
+# rejected, not judged. The order is fixed (never shuffled) so every validator
+# walks the same sequence and consensus cannot diverge on gateway choice.
+EVIDENCE_GATEWAYS = (
+    "https://w3s.link/ipfs/",
+    "https://dweb.link/ipfs/",
+    "https://ipfs.io/ipfs/",
+    "https://cloudflare-ipfs.com/ipfs/",
+)
+# Kept for the docstring wording and any single-gateway reference.
+EVIDENCE_GATEWAY = EVIDENCE_GATEWAYS[0]
+
+# Bounds on user-typed identifiers (FIX-21). job_id / agent_id are stored as
+# TreeMap keys and (for a rejected payable call) copied into a rejection record,
+# so an unbounded string is a storage-growth vector.
+MAX_ID_LEN = 128
+
+# CID multihash prefix for sha2-256: [0x12, 0x20, <32 bytes>].
+_MH_SHA2_256 = b"\x12\x20"
 
 # Evidence CID bounds (FIX-01): CIDs are shape-checked AND length-capped so a
 # 10,000-char "CID" can't slip past and produce a 414. Evidence bodies are
@@ -285,6 +308,7 @@ EVIDENCE_GATEWAY = "https://w3s.link/ipfs/"
 # bloat every validator's LLM call.
 MAX_CID_LEN = 64
 MAX_EVIDENCE_BYTES = 128 * 1024  # 128 KB hard cap before prompt construction
+MAX_EVIDENCE_CHARS = 16000  # decoded-character cap; matches the _fence cap (FIX-21)
 
 _B58_ALPHABET = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 _B32_ALPHABET = set("abcdefghijklmnopqrstuvwxyz234567")
@@ -355,6 +379,106 @@ def _canonical_content_hash(value: str) -> str:
     raise gl.vm.UserError(
         f"{ERROR_EXPECTED} must be a content-addressed IPFS CID, not a URL"
     )
+
+
+def _b58_decode(s: str) -> bytes:
+    """Minimal base58btc decoder, used only for CIDv0 payloads."""
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    num = 0
+    for ch in s:
+        idx = alphabet.find(ch)
+        if idx < 0:
+            raise ValueError("bad base58 character")
+        num = num * 58 + idx
+    pad = 0
+    for ch in s:
+        if ch == "1":
+            pad += 1
+        else:
+            break
+    body = num.to_bytes((num.bit_length() + 7) // 8, "big") if num > 0 else b""
+    return b"\x00" * pad + body
+
+
+def _b32_decode(s: str) -> bytes:
+    """Minimal RFC4648 base32 decoder (lowercase, padding optional)."""
+    up = s.upper()
+    return base64.b32decode(up + "=" * ((8 - len(up) % 8) % 8))
+
+
+def _cid_digest(cid: str) -> bytes:
+    """The sha2-256 digest a CID commits to, or ValueError for a form this
+    contract cannot check. CIDv0 = base58btc(0x12 0x20 <32B>); CIDv1 base32
+    ('b') = 0x01 <codec> 0x12 0x20 <32B>, codec dag-pb (0x70) or raw (0x55).
+    A CID committing to any other hash is refused, not trusted (FIX-21)."""
+    if len(cid) == 46 and cid.startswith("Qm"):
+        raw = _b58_decode(cid)
+    else:
+        raw = _b32_decode(cid[1:])  # strip the multibase 'b' prefix
+        if len(raw) < 2 or raw[0] != 1:
+            raise ValueError("unsupported CIDv1")
+        if raw[1] not in (0x70, 0x55):  # dag-pb / raw
+            raise ValueError("unsupported multicodec")
+        raw = raw[2:]
+    if len(raw) != 34 or raw[0:2] != _MH_SHA2_256:
+        raise ValueError("CID is not a sha2-256 multihash")
+    return raw[2:]
+
+
+def _fetch_verified(cid: str) -> dict:
+    """Fetch a CID across the evidence gateways and verify the returned bytes
+    against the digest the CID itself commits to (FIX-21).
+
+    Returns exactly one of:
+      {"state": "ok", "text": <str>}  -- >=1 gateway served bytes whose sha256
+                                        equals the CID digest, decoded strictly
+                                        as UTF-8 within both size caps
+      {"state": "not_found"}          -- every gateway answered 4xx
+      {"state": "integrity"}          -- bytes served, but they do not hash to
+                                        the CID (gateway served different content)
+      {"state": "oversized"}          -- over MAX_EVIDENCE_BYTES / _CHARS
+      {"state": "non_text"}           -- not valid UTF-8
+      {"state": "unavailable"}        -- every gateway 5xx / rate-limited / errored
+
+    Deliberately deterministic: fixed gateway order, no shuffling, no silent
+    truncation or errors='replace' -- every outcome is an explicit state the
+    caller turns into a defined verdict (see _judge_breach's policy table)."""
+    try:
+        want = _cid_digest(cid)
+    except ValueError:
+        # A CID we cannot check is not evidence we can trust.
+        return {"state": "integrity"}
+    saw_not_found = False
+    saw_integrity = False
+    for gw in EVIDENCE_GATEWAYS:
+        try:
+            res = gl.nondet.web.get(gw + cid)
+        except Exception:
+            continue
+        status = int(res.status)
+        if status == 429 or status >= 500:
+            continue
+        if status >= 400:
+            saw_not_found = True
+            continue
+        body = res.body or b""
+        if len(body) > MAX_EVIDENCE_BYTES:
+            return {"state": "oversized"}
+        if hashlib.sha256(body).digest() != want:
+            saw_integrity = True
+            continue
+        try:
+            text = body.decode("utf-8")  # strict: never silently replaced
+        except UnicodeDecodeError:
+            return {"state": "non_text"}
+        if len(text) > MAX_EVIDENCE_CHARS:
+            return {"state": "oversized"}
+        return {"state": "ok", "text": text}
+    if saw_integrity:
+        return {"state": "integrity"}
+    if saw_not_found:
+        return {"state": "not_found"}
+    return {"state": "unavailable"}
 
 
 def _iso_to_epoch_seconds(iso_str: str) -> int:
@@ -513,6 +637,16 @@ class Proofmark(gl.Contract):
     agent_distinct_buyers: TreeMap[str, u256]  # agent_id -> count of distinct buyer addresses
     agent_buyer_seen: TreeMap[str, bool]       # "{agent_id}:{buyer address}" -> True once seen
 
+    # FIX-21: "{payer address}|{job key}" -> why a PAYABLE call was rejected
+    # WITHOUT reverting, plus the amount refunded in that same transaction.
+    # A reverted payable call in GenLayer does not return the attached value
+    # (proven live: tx 0x429b0177... left 0.06 GEN in the contract with the
+    # explorer balance rising 19.06 -> 19.12 and no ledger entry), so the only
+    # value-safe shape is to accept the call, refund in full, and record the
+    # reason here. This map is what lets the UI show a precise cause -- there
+    # is no revert message to read on a call that succeeded.
+    payable_rejections: TreeMap[str, str]
+
     def __init__(self):
         """No constructor params and no admin keyholder -- storage is
         class-annotated above and the contract is ungoverned by design
@@ -522,6 +656,69 @@ class Proofmark(gl.Contract):
     # ------------------------------------------------------------------
     # Agent identity & reputation
     # ------------------------------------------------------------------
+
+    def _reject_payable(self, reason: str, job_key: str = "") -> None:
+        """Reject a PAYABLE call without reverting (FIX-21).
+
+        GenLayer does not refund the attached value of a reverted payable call:
+        the sender is debited, the value sits in the contract balance with no
+        ledger entry, and the explorer shows the balance rise (live:
+        0x429b0177... 19.06 -> 19.12 GEN against an issue_policy that finalized
+        GENVM RESULT: ERROR). Retention is therefore unavoidable on a revert,
+        so no buyer-fixable condition may ever take that path. Every such
+        condition instead refunds the full attached value in the SAME
+        transaction and returns normally, recording the precise reason here so
+        the UI can surface it from a success receipt."""
+        paid = int(gl.message.value)
+        if paid > 0:
+            _EoaPay(gl.message.sender_address).emit_transfer(
+                value=u256(paid)
+                # External (EthSend) rail: full refund of the attached value.
+                # External messages execute only on finality, so state commits
+                # before the transfer runs -- no re-entry is possible.
+            )
+        sender_key = _normalize_key(str(gl.message.sender_address))
+        self.payable_rejections[f"{sender_key}|{job_key[:MAX_ID_LEN]}"] = (
+            f"{reason} — rejected and refunded {paid} atto in this transaction; "
+            f"the contract retained nothing"
+        )
+
+    @gl.public.view
+    def get_rejection(self, payer: str, job_id: str = "") -> str:
+        """The reason a payable call from `payer` for `job_id` was rejected and
+        refunded, or "" if the last such call was not rejected. Read this after
+        any payable write to get the precise cause (FIX-21) -- a rejected call
+        SUCCEEDS on-chain, so there is no revert message in the receipt."""
+        key = f"{_normalize_key(payer)}|{_normalize_key(job_id)[:MAX_ID_LEN]}"
+        return self.payable_rejections[key] if key in self.payable_rejections else ""
+
+    @gl.public.view
+    def get_accounting(self, tier: str) -> dict:
+        """Reconcile the contract's on-chain balance with its internal ledger
+        (FIX-21). `contract_balance_atto` is this contract's own GEN balance as
+        the chain sees it; `ledger_atto` is what the internal accounting says
+        the tier pools hold. For a correctly operating contract, the sum over
+        all tiers of ledger_atto equals the contract balance -- any surplus is
+        value that a rejected-before-FIX-21 payable call retained, and FIX-21's
+        refund-in-call shape exists precisely so that surplus never grows."""
+        pool = int(self.tier_balance[tier]) if tier in self.tier_balance else 0
+        pending = 0
+        for key in self.pending_claims:
+            policy = self.policies[key] if key in self.policies else None
+            if policy is not None and policy.pool_tier == tier:
+                # Escrowed claim bonds are held, not yet credited to the pool.
+                pending += int(self.pending_claims[key])
+        return {
+            "tier": tier,
+            "tier_balance_atto": pool,
+            "pending_claim_bonds_atto": pending,
+            "locked_exposure_atto": int(self.tier_locked_exposure[tier])
+            if tier in self.tier_locked_exposure
+            else 0,
+            "total_shares": int(self.tier_shares[tier]) if tier in self.tier_shares else 0,
+            "contract_balance_atto": int(self.balance),
+            "attributed_atto": pool + pending,
+        }
 
     @gl.public.write
     def register(self, agent_id: str) -> None:
@@ -655,14 +852,25 @@ class Proofmark(gl.Contract):
         deadline_iso: str,
         expected_tier: str = "",  # optional: buyer pins the tier they quoted against (FIX-14)
     ) -> None:
+        """Issue cover. PAYABLE, so every failure below is a REJECTION, not a
+        revert (FIX-21): a reverted payable call in GenLayer keeps the attached
+        value in the contract with no ledger entry (live tx 0x429b0177...), so
+        each buyer-fixable condition refunds in full inside this same
+        transaction and records the reason for get_rejection to return."""
         job_key = _normalize_key(job_id)
         agent_key = _normalize_key(agent_id)
+        if len(job_id) > MAX_ID_LEN or len(agent_id) > MAX_ID_LEN:
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} job_id/agent_id exceeds {MAX_ID_LEN} characters", job_key
+            )
         if job_key == "":
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} job_id cannot be empty")
+            return self._reject_payable(f"{ERROR_EXPECTED} job_id cannot be empty", job_key)
         if job_key in self.policies:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} policy already exists for job_id")
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} policy already exists for job_id", job_key
+            )
         if agent_key not in self.agents:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown agent_id")
+            return self._reject_payable(f"{ERROR_EXPECTED} unknown agent_id", job_key)
         if gl.message.sender_address == self.agents[agent_key].owner:
             # Self-dealing hardening: the cheapest drain is one wallet that
             # registers an agent and then buys cover on it, collecting a payout
@@ -670,21 +878,29 @@ class Proofmark(gl.Contract):
             # (the honest market and the demo both already are). Two wallets
             # under one controller remain possible -- see the known-residual
             # note in the module docstring.
-            raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} the agent's owner cannot insure the agent's own job"
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} the agent's owner cannot insure the agent's own job", job_key
             )
-        spec_hash = _canonical_content_hash(spec_hash)  # validates, strips, and stores canonical (FIX-01)
+        try:
+            spec_hash = _canonical_content_hash(spec_hash)  # validates, strips (FIX-01)
+            _cid_digest(spec_hash)  # must decode to a real sha2-256 multihash (FIX-21)
+        except gl.vm.UserError as e:
+            return self._reject_payable(e.message if hasattr(e, "message") else str(e), job_key)
+        except ValueError:
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} spec_hash is not a decodable sha2-256 IPFS CID", job_key
+            )
         if int(coverage_atto) <= 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} coverage_atto must be > 0")
+            return self._reject_payable(f"{ERROR_EXPECTED} coverage_atto must be > 0", job_key)
         if int(coverage_atto) < MIN_COVERAGE_ATTO:
-            raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} coverage_atto must be at least {MIN_COVERAGE_ATTO} atto"
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} coverage_atto must be at least {MIN_COVERAGE_ATTO} atto", job_key
             )
         try:
             deadline_s = _iso_to_epoch_seconds(deadline_iso)
         except (ValueError, IndexError):
-            raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} deadline must be an ISO-8601 UTC timestamp"
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} deadline must be an ISO-8601 UTC timestamp", job_key
             )
         now_s = _iso_to_epoch_seconds(gl.message_raw["datetime"])
         if deadline_s - now_s < MIN_DEADLINE_HORIZON_SECONDS:
@@ -696,41 +912,47 @@ class Proofmark(gl.Contract):
             # agent a genuine chance to deliver before any auto-breach claim
             # is even possible. Epoch compare, not string compare, so the
             # check has no sub-second format ambiguity.
-            raise gl.vm.UserError(
+            return self._reject_payable(
                 f"{ERROR_EXPECTED} deadline must be at least "
-                f"{MIN_DEADLINE_HORIZON_SECONDS} seconds in the future"
+                f"{MIN_DEADLINE_HORIZON_SECONDS} seconds in the future",
+                job_key,
             )
 
         tier = self.agents[agent_key].tier
         pool_value = int(self.tier_balance[tier]) if tier in self.tier_balance else 0
         if pool_value <= 0:
-            raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} no underwriting capital available for tier '{tier}' yet"
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} no underwriting capital available for tier '{tier}' yet", job_key
             )
         if expected_tier != "" and _normalize_key(expected_tier) != tier:
             # FIX-14: the buyer quoted against a specific tier. A third party
             # can flip the agent's tier between quote and issue; fail loudly
             # instead of silently charging a different rate than quoted.
-            raise gl.vm.UserError(
+            return self._reject_payable(
                 f"{ERROR_EXPECTED} tier changed since quote: "
-                f"expected '{_normalize_key(expected_tier)}', now '{tier}' — re-quote"
+                f"expected '{_normalize_key(expected_tier)}', now '{tier}' — re-quote",
+                job_key,
             )
-        if int(coverage_atto) > (pool_value * MAX_COVERAGE_BPS_OF_POOL) // 10000:
+        cap_atto = (pool_value * MAX_COVERAGE_BPS_OF_POOL) // 10000
+        if int(coverage_atto) > cap_atto:
             # Coverage on one policy is capped to what one claim can ever pay
             # (10% of the tier pool). A buyer must never hold a policy labeled
             # "20 GEN cover" that a single claim can only ever pay ~2 GEN on --
             # the label should be the ceiling. This also bounds the per-round
             # size of any manufactured auto-breach to that same share.
-            raise gl.vm.UserError(
+            return self._reject_payable(
                 f"{ERROR_EXPECTED} coverage exceeds the single-claim pool cap "
-                f"({(pool_value * MAX_COVERAGE_BPS_OF_POOL) // 10000} atto = "
-                f"{MAX_COVERAGE_BPS_OF_POOL // 100}% of the '{tier}' tier pool)"
+                f"({cap_atto} atto = {MAX_COVERAGE_BPS_OF_POOL // 100}% of the "
+                f"'{tier}' tier pool)",
+                job_key,
             )
 
         rate_bps = RATE_BPS_BY_TIER[tier]
         premium_atto = (int(coverage_atto) * rate_bps) // 10000
         if premium_atto <= 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} coverage too small to price a premium")
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} coverage too small to price a premium", job_key
+            )
 
         # FIX-03 aggregate cap: per-policy 10% caps never bounded the *sum*, so
         # ~11 policies at 10% each pushed locked exposure past the pool value
@@ -741,10 +963,11 @@ class Proofmark(gl.Contract):
         new_total_exposure = prior_exposure + int(coverage_atto)
         util_cap = ((pool_value + premium_atto) * MAX_UTILIZATION_BPS) // 10000
         if new_total_exposure > util_cap:
-            raise gl.vm.UserError(
+            return self._reject_payable(
                 f"{ERROR_EXPECTED} tier '{tier}' is at capacity — "
                 f"{prior_exposure} of {util_cap} atto already committed. "
-                f"Try a smaller coverage amount or wait for existing policies to resolve."
+                f"Try a smaller coverage amount or wait for existing policies to resolve.",
+                job_key,
             )
 
         # FIX-14: accept >= the premium. An exact-value race was front-runnable
@@ -752,8 +975,8 @@ class Proofmark(gl.Contract):
         # quote and submission. Credit exactly the premium; refund overpayment.
         paid = int(gl.message.value)
         if paid < premium_atto:
-            raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} premium must be at least {premium_atto} atto"
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} premium must be at least {premium_atto} atto", job_key
             )
 
         self.tier_balance[tier] = u256(pool_value + premium_atto)
@@ -779,22 +1002,19 @@ class Proofmark(gl.Contract):
             status=STATUS_PENDING,
             agent_accepted=False,
         )
+        # FIX-21 (review item 7): reputation counters move to accept_job. A
+        # PENDING policy that the agent rejects, the buyer cancels, or anyone
+        # expires must not leave a permanent jobs_insured / distinct-buyer
+        # mark -- otherwise third parties inflate an agent's reputation for
+        # free by issuing policies the agent never agreed to. Exposure is still
+        # reserved here; only the reputation credit waits for acceptance.
+        # A successful issue clears any stale rejection for this (payer, job).
+        self._clear_rejection(job_key)
 
-        profile = self.agents[agent_key]
-        profile.jobs_insured = u256(int(profile.jobs_insured) + 1)
-
-        buyer_key = _normalize_key(str(gl.message.sender_address))
-        seen_key = f"{agent_key}:{buyer_key}"
-        if seen_key not in self.agent_buyer_seen:
-            self.agent_buyer_seen[seen_key] = True
-            prior_distinct = (
-                int(self.agent_distinct_buyers[agent_key])
-                if agent_key in self.agent_distinct_buyers
-                else 0
-            )
-            self.agent_distinct_buyers[agent_key] = u256(prior_distinct + 1)
-
-        self._recompute_tier(agent_key)
+    def _clear_rejection(self, job_key: str) -> None:
+        key = f"{_normalize_key(str(gl.message.sender_address))}|{job_key[:MAX_ID_LEN]}"
+        if key in self.payable_rejections:
+            del self.payable_rejections[key]
 
     @gl.public.write
     def accept_job(self, job_id: str) -> None:
@@ -824,6 +1044,32 @@ class Proofmark(gl.Contract):
             )
         policy.status = STATUS_ACTIVE
         policy.agent_accepted = True
+
+        # FIX-21 (review item 7): the reputation credit lands here, on the
+        # agent's own acceptance, not at issue. jobs_insured and
+        # distinct_buyers are the inputs to every tier gate in
+        # _recompute_tier, so crediting them when a THIRD PARTY issued a
+        # policy let anyone inflate an unwilling agent's reputation (and
+        # therefore its tier) for the price of a premium -- and leave the
+        # counts permanently inflated when the agent rejected, the buyer
+        # cancelled, or the policy expired. Acceptance is the first moment the
+        # agent is genuinely bound, so it is the honest place to count.
+        agent_key = policy.agent_id
+        profile = self.agents[agent_key]
+        profile.jobs_insured = u256(int(profile.jobs_insured) + 1)
+
+        buyer_key = _normalize_key(str(policy.buyer))
+        seen_key = f"{agent_key}:{buyer_key}"
+        if seen_key not in self.agent_buyer_seen:
+            self.agent_buyer_seen[seen_key] = True
+            prior_distinct = (
+                int(self.agent_distinct_buyers[agent_key])
+                if agent_key in self.agent_distinct_buyers
+                else 0
+            )
+            self.agent_distinct_buyers[agent_key] = u256(prior_distinct + 1)
+
+        self._recompute_tier(agent_key)
 
     @gl.public.write
     def reject_job(self, job_id: str) -> None:
@@ -899,34 +1145,61 @@ class Proofmark(gl.Contract):
             # transfer executes -- classic EVM reentrancy cannot occur here.
         )
 
-    def _probe_evidence(self, cid: str) -> None:
-        """Probe the CID at submission time so an unretrievable CID fails on
-        the AGENT's transaction rather than permanently bricking the buyer's
-        later claim (FIX-01). Also size-checks here so an oversized file never
-        enters any validator's prompt."""
+    def _probe_evidence(self, cid: str) -> str:
+        """Consensus-checked evidence probe (FIX-01, FIX-21). Returns exactly
+        one of _fetch_verified's states -- ok / not_found / integrity /
+        oversized / non_text / unavailable -- and NEVER reverts on its own.
+
+        It deliberately does not revert: callers on a payable path must turn a
+        bad state into a refund, because a reverted payable call retains the
+        attached value. It also returns a STATE rather than the fetched text so
+        validators compare one small deterministic token, never a payload.
+
+        This replaces the pre-FIX-21 shape, which fetched from a single gateway
+        and let a 4xx through as "the bytes are fine"; nothing checked the
+        served bytes against the CID's own digest, and an oversized file was
+        rejected while a wrong-content file was silently judged."""
         def leader_fn() -> dict:
-            res = gl.nondet.web.get(EVIDENCE_GATEWAY + cid)
-            if res.status >= 500:
-                raise gl.vm.UserError(f"{ERROR_TRANSIENT} evidence gateway unavailable")
-            if res.status >= 400:
-                raise gl.vm.UserError(f"{ERROR_EXPECTED} evidence CID not retrievable (HTTP {res.status})")
-            body = res.body or b""
-            if len(body) > MAX_EVIDENCE_BYTES:
-                raise gl.vm.UserError(f"{ERROR_EXPECTED} evidence exceeds {MAX_EVIDENCE_BYTES} byte cap")
-            return {"ok": True, "size": len(body)}
+            return _fetch_verified(cid)
 
         def validator_fn(leaders_res: gl.vm.Result) -> bool:
             if not isinstance(leaders_res, gl.vm.Return):
-                return _handle_leader_error(leaders_res, leader_fn)
+                # Leader errored (or raised) -- never agree, force rotation.
+                return False
             try:
-                leader_fn()
-            except gl.vm.UserError:
-                return False
+                mine = leader_fn()
             except Exception:
+                # Our own re-derivation failed -- disagree rather than let an
+                # exception escape with unspecified GenVM semantics (FIX-10).
                 return False
-            return True
+            return str(mine.get("state")) == str(leaders_res.calldata.get("state"))
 
-        gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        return str(result.get("state", "unavailable"))
+
+    def _probe_or_reason(self, cid: str, label: str) -> str:
+        """Probe and translate a non-ok state into an [EXPECTED]/[TRANSIENT]
+        reason string. Returns "" when the evidence is ok."""
+        state = self._probe_evidence(cid)
+        if state == "ok":
+            return ""
+        if state == "unavailable":
+            return f"{ERROR_TRANSIENT} evidence gateway unavailable while checking {label}"
+        if state == "not_found":
+            return f"{ERROR_EXPECTED} {label} CID is not retrievable from any evidence gateway"
+        if state == "integrity":
+            return (
+                f"{ERROR_EXPECTED} {label} bytes do not match the CID's own sha2-256 "
+                f"digest — refused rather than judged"
+            )
+        if state == "non_text":
+            return f"{ERROR_EXPECTED} {label} is not valid UTF-8 text"
+        if state == "oversized":
+            return (
+                f"{ERROR_EXPECTED} {label} exceeds {MAX_EVIDENCE_CHARS} characters / "
+                f"{MAX_EVIDENCE_BYTES} bytes"
+            )
+        return f"{ERROR_EXPECTED} {label} could not be verified"
 
     @gl.public.write
     def submit_deliverable(self, job_id: str, deliverable_hash: str) -> None:
@@ -934,7 +1207,9 @@ class Proofmark(gl.Contract):
         judged against -- a buyer can never supply this themselves (see module
         docstring). Evidence is frozen at the deadline: after it passes the
         agent can no longer swap in an unretrievable CID to neutralise a
-        pending claim, and the CID is probed live so an unresolvable CID
+        pending claim, and the CID is probed live -- across every gateway, with
+        the served bytes checked against the digest the CID itself commits to
+        (FIX-21) -- so an unresolvable, non-text, oversized, or tampered CID
         reverts HERE, on the agent's transaction, not on the buyer's claim."""
         job_key = _normalize_key(job_id)
         if job_key not in self.policies:
@@ -962,8 +1237,21 @@ class Proofmark(gl.Contract):
                 f"{ERROR_EXPECTED} deadline passed -- deliverable is frozen"
             )
 
-        cid = _canonical_content_hash(deliverable_hash)  # validates + strips
-        self._probe_evidence(cid)  # live reachability + size
+        try:
+            cid = _canonical_content_hash(deliverable_hash)  # validates + strips
+            _cid_digest(cid)  # must decode to a real sha2-256 multihash (FIX-21)
+        except gl.vm.UserError as e:
+            raise gl.vm.UserError(e.message if hasattr(e, "message") else str(e))
+        except ValueError:
+            raise gl.vm.UserError(
+                f"{ERROR_EXPECTED} deliverable_hash is not a decodable sha2-256 IPFS CID"
+            )
+        # Live reachability + size + CID-integrity check. This call is
+        # deliberately NOT payable, so reverting here is value-safe: it fails
+        # on the AGENT's own transaction and leaves nothing behind.
+        reason = self._probe_or_reason(cid, "deliverable")
+        if reason != "":
+            raise gl.vm.UserError(reason)
         policy.deliverable_hash = cid  # store canonical form only
 
     @gl.public.write
@@ -1042,11 +1330,13 @@ class Proofmark(gl.Contract):
 
     @gl.public.write.payable
     def deposit(self, tier: str) -> None:
+        """Add underwriting capital. PAYABLE, so rejections refund in-call
+        (FIX-21) -- see _reject_payable."""
         if tier not in VALID_TIERS:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown tier '{tier}'")
+            return self._reject_payable(f"{ERROR_EXPECTED} unknown tier '{tier}'")
         contributed = int(gl.message.value)
         if contributed <= 0:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} deposit must be > 0")
+            return self._reject_payable(f"{ERROR_EXPECTED} deposit must be > 0")
 
         pool_before = int(self.tier_balance[tier]) if tier in self.tier_balance else 0
         shares_before = int(self.tier_shares[tier]) if tier in self.tier_shares else 0
@@ -1057,10 +1347,11 @@ class Proofmark(gl.Contract):
             # check), and every other credit to tier_balance is paired with
             # a matching share mint in this same function. If this is ever
             # hit anyway (e.g. a future code change reintroduces the gap),
-            # fail loudly instead of silently handing a depositor 100% of
-            # an unattributed balance -- the exact empty-pool exploit this
-            # audit pass closed.
-            raise gl.vm.UserError(
+            # reject-and-refund loudly instead of silently handing a
+            # depositor 100% of an unattributed balance -- the exact
+            # empty-pool exploit this audit pass closed. Rejecting (rather
+            # than reverting) is what keeps the deposit from being retained.
+            return self._reject_payable(
                 f"{ERROR_EXPECTED} tier has an unattributed balance with no shares -- aborting"
             )
 
@@ -1072,8 +1363,8 @@ class Proofmark(gl.Contract):
         if minted == 0:
             # Tiny deposit into a large pool can integer-divide to zero
             # shares: the depositor would lose their GEN and own nothing.
-            # Reject instead of silently burning value (FIX-11).
-            raise gl.vm.UserError(
+            # Reject-and-refund instead of silently burning value (FIX-11).
+            return self._reject_payable(
                 f"{ERROR_EXPECTED} deposit too small to mint any LP shares in this pool"
             )
 
@@ -1083,6 +1374,11 @@ class Proofmark(gl.Contract):
         share_key = f"{tier}:{_normalize_key(str(gl.message.sender_address))}"
         existing = int(self.lp_shares[share_key]) if share_key in self.lp_shares else 0
         self.lp_shares[share_key] = u256(existing + minted)
+        # A successful payable call clears any rejection recorded for this
+        # (payer, tier) key, so get_rejection() always answers the question the
+        # UI actually asks: "was the call I just made rejected?" -- not "was
+        # some earlier call from this payer rejected?".
+        self._clear_rejection("")
 
     @gl.public.write
     def withdraw(self, tier: str, shares: u256) -> None:
@@ -1143,22 +1439,42 @@ class Proofmark(gl.Contract):
 
     @gl.public.write.payable
     def file_claim(self, job_id: str) -> None:
+        """File a claim, escrowing the anti-spam bond. PAYABLE, so every
+        rejection below refunds the bond in-call (FIX-21) rather than
+        reverting and leaving it in the contract.
+
+        The judged path is still split: this function is DETERMINISTIC and only
+        escrows the bond + records the pending claim. The non-deterministic
+        conformance judgement runs in the separate NON-payable judge_claim, so a
+        failed judgement never has attached value at risk."""
         # ---------------- Deterministic gate (no AI call yet) ----------------
         job_key = _normalize_key(job_id)
+        if len(job_id) > MAX_ID_LEN:
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} job_id exceeds {MAX_ID_LEN} characters", job_key
+            )
         if job_key in self.resolved_claims:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} claim already resolved for job_id")
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} claim already resolved for job_id", job_key
+            )
         if job_key in self.pending_claims:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} claim already pending for job_id")
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} claim already pending for job_id", job_key
+            )
         if job_key not in self.policies:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown job_id")
+            return self._reject_payable(f"{ERROR_EXPECTED} unknown job_id", job_key)
 
         policy = self.policies[job_key]
         if policy.status != STATUS_ACTIVE:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not active")
+            return self._reject_payable(f"{ERROR_EXPECTED} policy not active", job_key)
         if gl.message.sender_address != policy.buyer:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} only the policy buyer may file this claim")
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} only the policy buyer may file this claim", job_key
+            )
         if int(gl.message.value) != CLAIM_BOND_ATTO:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} claim bond must be exactly {CLAIM_BOND_ATTO} atto")
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} claim bond must be exactly {CLAIM_BOND_ATTO} atto", job_key
+            )
 
         deadline_passed = _iso_to_epoch_seconds(
             gl.message_raw["datetime"]
@@ -1172,9 +1488,10 @@ class Proofmark(gl.Contract):
         if deadline_passed:
             claim_cutoff_s = _iso_to_epoch_seconds(policy.deadline_iso) + CLAIM_WINDOW_SECONDS
             if _iso_to_epoch_seconds(gl.message_raw["datetime"]) > claim_cutoff_s:
-                raise gl.vm.UserError(
+                return self._reject_payable(
                     f"{ERROR_EXPECTED} claim window has closed for this policy "
-                    f"— use expire_policy to release the exposure"
+                    f"— use expire_policy to release the exposure",
+                    job_key,
                 )
 
         if policy.deliverable_hash == "":
@@ -1184,22 +1501,21 @@ class Proofmark(gl.Contract):
             # deterministic breach: no evidence exists to fetch, so
             # there's no judgment call for GenLayer consensus to make.
             if not deadline_passed:
-                raise gl.vm.UserError(
-                    f"{ERROR_EXPECTED} deadline has not passed and no deliverable was submitted yet"
+                return self._reject_payable(
+                    f"{ERROR_EXPECTED} deadline has not passed and no deliverable "
+                    f"was submitted yet",
+                    job_key,
                 )
             # Deterministic auto-breach -- resolve immediately. No AI call, so
             # nothing here can burn the bond (FIX-19 / H-02).
+            self._clear_rejection(job_key)
             self._resolve_claim(job_key, policy, True)
             return
 
-        # Judged path (FIX-19 / H-02): file_claim is DETERMINISTIC and only
-        # escrows the bond + records the pending claim. The non-deterministic
-        # conformance judgement runs in the separate NON-payable judge_claim,
-        # so a failed judgement (transient gateway outage, LLM error, validator
-        # disagreement) reverts with NO attached value -- the 2 GEN bond is
-        # never burned by a reverted payable call, and the pending claim is
-        # retryable (judge_claim) or recoverable (rescind_pending_claim).
         self.pending_claims[job_key] = u256(CLAIM_BOND_ATTO)
+        # See deposit(): a successful call clears this payer's stale rejection
+        # for this job so get_rejection() describes the call just made.
+        self._clear_rejection(job_key)
 
     def _resolve_claim(self, job_key: str, policy, breach: bool) -> None:
         """Shared resolution for both claim paths. Runs after the judgement
@@ -1221,8 +1537,26 @@ class Proofmark(gl.Contract):
         if breach:
             profile.claims_upheld_against = u256(int(profile.claims_upheld_against) + 1)
 
-            cap = (pool_value * MAX_PAYOUT_BPS_OF_POOL) // 10000
-            payout = min(int(policy.coverage_atto), cap)
+            # FIX-21 (review item 5): coverage_atto is paid IN FULL. Before this
+            # fix the payout was min(coverage_atto, 10% of the CURRENT pool), so
+            # an LP withdrawal between issue and settlement could quietly shrink
+            # a policy's advertised cover -- the label was not the ceiling it
+            # claimed to be.
+            #
+            # Paying exactly coverage_atto is always solvent, by three
+            # invariants this contract enforces:
+            #   (1) issue_policy requires coverage_atto <= 10% of the tier pool
+            #       AND total locked exposure <= MAX_UTILIZATION_BPS (50%) of it,
+            #       so tier_balance >= 2x locked_exposure right after any issue;
+            #   (2) withdraw refuses any amount that would take tier_balance
+            #       below tier_locked_exposure, and every other debit
+            #       (_refund_premium) is <= the coverage it un-locks, so
+            #       tier_balance >= tier_locked_exposure is preserved;
+            #   (3) this claim's coverage is part of locked_exposure, so
+            #       tier_balance >= coverage_atto at settlement.
+            # get_accounting exposes these figures so the invariant is
+            # externally checkable rather than merely asserted.
+            payout = int(policy.coverage_atto)
             self.tier_balance[tier] = u256(pool_value - payout)
 
             _EoaPay(policy.buyer).emit_transfer(value=u256(payout))
@@ -1294,48 +1628,45 @@ class Proofmark(gl.Contract):
         _EoaPay(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO))
 
     def _judge_breach(self, spec_hash: str, deliverable_hash: str) -> dict:
+        """Adjudicate a claim. Every evidence outcome maps to a DEFINED verdict
+        (FIX-21 review item 8); nothing is silently truncated, coerced, or
+        judged from bytes that do not match the CID that was committed to
+        on-chain. See _fetch_verified for how each state is derived.
+
+        Custody rule (unchanged from FIX-01, now applied to every failure mode):
+        the DELIVERABLE is agent-supplied and agent-replaceable, so a failure on
+        it is the agent's breach; the SPEC is buyer-supplied, so a failure on
+        it fails the CLAIM (bond forfeited, no payout). Payment only ever
+        follows a spec and a deliverable that BOTH resolved and hashed
+        correctly, so neither party can manufacture a payout out of a broken
+        gateway or a mismatched CID.
+
+        Transient failures (every gateway 5xx / rate-limited) are checked
+        FIRST, for both sides: an outage is not a verdict about anyone. This
+        raises [TRANSIENT], which forces validator rotation and leaves the
+        pending claim intact and retryable -- and because judge_claim is not
+        payable, nothing is burned while retrying."""
         def leader_fn() -> dict:
-            spec_res = gl.nondet.web.get(EVIDENCE_GATEWAY + spec_hash)
-            deliverable_res = gl.nondet.web.get(EVIDENCE_GATEWAY + deliverable_hash)
+            spec = _fetch_verified(spec_hash)
+            deliv = _fetch_verified(deliverable_hash)
 
-            if spec_res.status == 429 or deliverable_res.status == 429:
-                # Rate limiting is per-validator and transient -- not a verdict
-                # signal. Route to rotation, not to a permanent outcome (FIX-13).
-                raise gl.vm.UserError(f"{ERROR_TRANSIENT} evidence gateway rate-limited")
-            if spec_res.status >= 500 or deliverable_res.status >= 500:
+            if spec["state"] == "unavailable" or deliv["state"] == "unavailable":
+                # Rate limiting and 5xx are per-validator and transient -- not
+                # a verdict signal. Route to rotation, not a permanent outcome.
                 raise gl.vm.UserError(f"{ERROR_TRANSIENT} evidence gateway unavailable")
-            if deliverable_res.status >= 400:
-                # The two CIDs have opposite custody, so a failure resolves
-                # against whichever party's evidence it is. The DELIVERABLE is
-                # agent-supplied and live-probed at submit_deliverable -- a 4xx
-                # now means the agent unpinned it after submission, which is a
-                # breach, not an unjudgeable claim. The SPEC is buyer-supplied
-                # and only shape-checked at issue_policy -- a 4xx now means the
-                # BUYER's own evidence is gone, and the claim fails (rejected,
-                # bond forfeited) rather than paying out. A buyer who can unpin
-                # its own spec must never be able to manufacture a breach
-                # against an agent that delivered. Reverting is off the table
-                # for both: it burns the bond and never resolves the claim
-                # (FIX-01 Step 5). No status codes appear in any error text
-                # (FIX-13).
-                return {"score": 0, "breach": True}  # agent's evidence gone
-            if spec_res.status >= 400:
-                return {"score": 0, "breach": False}  # buyer's evidence gone
 
-            # Defence-in-depth size caps (FIX-05): the probe at submission
-            # bounds the deliverable, but content can grow or truncate later,
-            # so cap again here before anything reaches the prompt. Same
-            # custody split: an oversized deliverable is the agent's breach;
-            # an oversized spec is the buyer's own evidence failing.
-            spec_body = spec_res.body or b""
-            deliv_body = deliverable_res.body or b""
-            if len(deliv_body) > MAX_EVIDENCE_BYTES:
-                return {"score": 0, "breach": True}  # oversized deliverable = breach
-            if len(spec_body) > MAX_EVIDENCE_BYTES:
-                return {"score": 0, "breach": False}  # oversized spec = buyer's evidence unverifiable
+            # Agent's evidence: any non-ok state (gone, tampered, oversized,
+            # binary, unverifiable CID) is the agent's breach.
+            if deliv["state"] != "ok":
+                return {"score": 0, "breach": True}
+            # Buyer's evidence: any non-ok state fails the claim rather than
+            # paying out. A buyer who breaks its own spec must never be able to
+            # manufacture a breach against an agent that delivered.
+            if spec["state"] != "ok":
+                return {"score": 0, "breach": False}
 
-            spec_text = spec_body.decode("utf-8", errors="replace")
-            deliverable_text = deliv_body.decode("utf-8", errors="replace")
+            spec_text = spec["text"]
+            deliverable_text = deliv["text"]
 
             prompt = (
                 "You are a contract-conformance grader. The two documents below "

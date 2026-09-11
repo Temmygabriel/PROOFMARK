@@ -24,6 +24,22 @@ const CHAIN = NETWORK_NAME === "testnetBradbury" ? testnetBradbury : studionet;
 export const PROOFMARK_ADDRESS = process.env
   .NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS as `0x${string}` | undefined;
 
+/** Block explorer for the selected network. Review item 4: every write result
+ * the UI reports links back to the exact transaction, so a reviewer can verify
+ * a claim about a payout (or a rejection) independently of this app. */
+export const EXPLORER_BASE =
+  NETWORK_NAME === "testnetBradbury"
+    ? "https://explorer-bradbury.genlayer.com"
+    : "https://explorer-studio.genlayer.com";
+
+export function explorerTxUrl(hash: string): string {
+  return `${EXPLORER_BASE}/tx/${hash}`;
+}
+
+export function explorerAddressUrl(address: string): string {
+  return `${EXPLORER_BASE}/address/${address}`;
+}
+
 // Fixed contract constants (mirrors proofmark.py -- keep these two in sync if the
 // contract's constants ever change).
 export const VERDICT_BOND_ATTO = 2n * 10n ** 18n;
@@ -194,6 +210,70 @@ async function write(
   return { hash, result: receipt };
 }
 
+/**
+ * A payable call that SUCCEEDED on-chain but was rejected by the contract, with
+ * the attached value refunded in the same transaction (FIX-21).
+ *
+ * This is deliberate, and it is the only value-safe shape available: a reverted
+ * payable call on GenLayer does NOT return the attached value — the sender is
+ * debited and the value is retained by the contract with no ledger entry
+ * (proven live: tx 0x429b0177… left 0.06 GEN in the contract, explorer balance
+ * 19.06 → 19.12, against an issue_policy that finalized GENVM RESULT: ERROR).
+ * So the contract never reverts on a caller-fixable condition; it accepts the
+ * call, refunds in full, and records the precise reason on-chain in
+ * `payable_rejections`, readable via `get_rejection(payer, job_id)`.
+ *
+ * Consequence for this client: a rejected call has NO revert message in its
+ * receipt — the receipt is a success. The reason is read back and surfaced
+ * here together with the transaction link, so the user sees both the cause and
+ * the independent on-chain proof that the refund happened.
+ */
+export class ContractRejectionError extends Error {
+  readonly hash: string;
+  readonly explorerUrl: string;
+  /** The contract's reason, with GenLayer classification prefixes stripped. */
+  readonly reason: string;
+
+  constructor(reason: string, hash: string) {
+    const clean = cleanContractError(reason).trim();
+    super(
+      `${clean} Your funds were refunded in the same transaction — the contract ` +
+        `retained nothing. Verify it on the explorer: ${explorerTxUrl(hash)}`
+    );
+    this.name = "ContractRejectionError";
+    this.hash = hash;
+    this.explorerUrl = explorerTxUrl(hash);
+    this.reason = clean;
+  }
+}
+
+/** The reason a payable call from `payer` (optionally for `jobId`) was rejected
+ * and refunded, or "" if the last such call was not rejected. */
+export function getRejection(payer: string, jobId = "") {
+  return read<string>("get_rejection", [payer, jobId]);
+}
+
+/**
+ * After a payable write finalizes, ask the contract whether it rejected the
+ * call. A rejection is not a transaction failure — it is a success carrying a
+ * refund — so it cannot be caught by the receipt classifier and must be read
+ * back explicitly. A failed read-back never turns a proven success into a
+ * reported failure: the reason stays readable on-chain via `get_rejection`.
+ */
+async function assertNotRejected(
+  account: GenAccount,
+  hash: `0x${string}`,
+  jobId = ""
+): Promise<void> {
+  let reason = "";
+  try {
+    reason = await getRejection(account.address, jobId);
+  } catch {
+    return;
+  }
+  if (reason) throw new ContractRejectionError(reason, hash);
+}
+
 // ---------------------------------------------------------------------------
 // Agent identity & reputation
 // ---------------------------------------------------------------------------
@@ -229,7 +309,7 @@ export function quotePremium(agentId: string, coverageAtto: bigint) {
   );
 }
 
-export function issuePolicy(
+export async function issuePolicy(
   account: GenAccount,
   jobId: string,
   agentId: string,
@@ -238,12 +318,16 @@ export function issuePolicy(
   deadlineIso: string,
   premiumAtto: bigint
 ) {
-  return write(
+  const res = await write(
     account,
     "issue_policy",
     [jobId, agentId, coverageAtto, specHash, deadlineIso],
     premiumAtto
   );
+  // A rejected issue SUCCEEDS on-chain (refund in-call, FIX-21) — read the
+  // precise reason back so the UI can show it instead of a bare success.
+  await assertNotRejected(account, res.hash, jobId);
+  return res;
 }
 
 export function submitDeliverable(
@@ -296,8 +380,12 @@ export function getPolicy(jobId: string) {
 // LP pools
 // ---------------------------------------------------------------------------
 
-export function deposit(account: GenAccount, tier: Tier, amountAtto: bigint) {
-  return write(account, "deposit", [tier], amountAtto);
+export async function deposit(account: GenAccount, tier: Tier, amountAtto: bigint) {
+  const res = await write(account, "deposit", [tier], amountAtto);
+  // Rejection here means the deposit was refused AND the GEN refunded in the
+  // same transaction (FIX-21) — surface the reason, not a false success.
+  await assertNotRejected(account, res.hash);
+  return res;
 }
 
 export function withdraw(account: GenAccount, tier: Tier, shares: bigint) {
@@ -321,8 +409,11 @@ export function getLpPosition(tier: Tier, address: string) {
 // Claims -- the one call that triggers GenLayer consensus
 // ---------------------------------------------------------------------------
 
-export function fileClaim(account: GenAccount, jobId: string) {
-  return write(account, "file_claim", [jobId], VERDICT_BOND_ATTO);
+export async function fileClaim(account: GenAccount, jobId: string) {
+  const res = await write(account, "file_claim", [jobId], VERDICT_BOND_ATTO);
+  // A refused claim refunds the bond in-call (FIX-21); read back the reason.
+  await assertNotRejected(account, res.hash, jobId);
+  return res;
 }
 
 /**

@@ -21,6 +21,9 @@ import {
   fileClaim,
   judgeClaim,
   getClaimStatus,
+  ContractRejectionError,
+  explorerTxUrl,
+  explorerAddressUrl,
   parseGenToAtto,
   formatAttoToGen,
   cleanContractError,
@@ -55,6 +58,37 @@ function gen(atto: bigint | number, decimals = 4): string {
 /** Strip GenLayer error-classification prefixes before showing to a human. */
 function errText(e: any): string {
   return cleanContractError(e?.message ?? String(e)).trim();
+}
+
+/**
+ * Notice for a caught error (review item 4). A ContractRejectionError is NOT a
+ * transaction failure: the call SUCCEEDED on-chain and the contract refunded
+ * the attached value in the same transaction (FIX-21), so there is no revert
+ * message to show. Surface the precise on-chain reason plus a link to the
+ * transaction that proves the refund.
+ */
+function errNotice(title: string, e: any): Notice {
+  if (e instanceof ContractRejectionError) {
+    return {
+      status: "error",
+      title: `${title.replace(/\s+failed$/i, "")}: not accepted, refunded in full`,
+      detail: e.reason,
+      href: e.explorerUrl,
+      linkLabel: "Verify the refund on the explorer",
+    };
+  }
+  return { status: "error", title, detail: errText(e) };
+}
+
+/** Notice for a write proven to have executed, linked to its transaction. */
+function txNotice(title: string, hash: string, detail?: string): Notice {
+  return {
+    status: "ok",
+    title,
+    detail,
+    href: explorerTxUrl(hash),
+    linkLabel: "View transaction on the explorer",
+  };
 }
 
 /* ------------------------------------------------------ live activity feed */
@@ -136,8 +170,8 @@ function seedFeedOnce() {
 
 type Notice =
   | { status: "idle" }
-  | { status: "pending"; title: string; detail?: string }
-  | { status: "ok" | "error"; title: string; detail?: string };
+  | { status: "pending"; title: string; detail?: string; href?: string; linkLabel?: string }
+  | { status: "ok" | "error"; title: string; detail?: string; href?: string; linkLabel?: string };
 
 const idleNotice: Notice = { status: "idle" };
 
@@ -157,6 +191,16 @@ function Notice({ n, style }: { n: Notice; style?: CSSProperties }) {
       <div className="notice-body">
         <div className="notice-title">{title}</div>
         {n.detail ? <div className="notice-detail">{n.detail}</div> : null}
+        {n.href ? (
+          <a
+            className="notice-link"
+            href={n.href}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            {n.linkLabel ?? "View on the block explorer"} ↗
+          </a>
+        ) : null}
       </div>
     </div>
   );
@@ -663,11 +707,16 @@ function PoolsPanel({
       const addr = await ensureWallet();
       const atto = parseGenToAtto(depAmount);
       const { hash } = await deposit(addr, depTier, atto);
-      setDepN({ status: "ok", title: `Deposited ${gen(atto)} GEN to ${TIER_NAMES[depTier].toLowerCase()}`, detail: `tx ${hash}` });
+      setDepN(
+        txNotice(
+          `Deposited ${gen(atto)} GEN to ${TIER_NAMES[depTier].toLowerCase()}`,
+          hash
+        )
+      );
       pushFeed({ action: "deposit", amount: `${gen(atto)} GEN`, tier: TIER_NAMES[depTier] });
       void refreshPools();
     } catch (e: any) {
-      setDepN({ status: "error", title: "Deposit failed", detail: errText(e) });
+      setDepN(errNotice("Deposit failed", e));
     }
   }
 
@@ -943,7 +992,7 @@ function CoveragePanel({
       );
       setQuote(null);
       setQuoteN(idleNotice);
-      setIssueN({ status: "ok", title: "Job is backed", detail: `tx ${hash}` });
+      setIssueN(txNotice("Job is backed", hash));
       pushFeed({
         action: "issue",
         jobId: job,
@@ -963,7 +1012,7 @@ function CoveragePanel({
         setPolN(idleNotice);
       }
     } catch (e: any) {
-      setIssueN({ status: "error", title: "Back failed", detail: errText(e) });
+      setIssueN(errNotice("Back failed", e));
     }
   }
 
@@ -1326,7 +1375,7 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
         pushFeed({ action: "verdict", jobId: cJobId.trim(), verdict: v });
     } catch (e: any) {
       setCSince(null);
-      setCN({ status: "error", title: "Request failed", detail: errText(e) });
+      setCN(errNotice("Request failed", e));
     }
   }
 
@@ -1461,7 +1510,7 @@ const TABS: { key: TabKey; label: string }[] = [
 ];
 
 export default function Home() {
-  const { identity, ready } = useIdentity();
+  const { identity, ready, status } = useIdentity();
   const [tab, setTab] = useState<TabKey>("coverage");
 
   const [pools, setPools] = useState<Record<Tier, PoolSnap>>({
@@ -1517,11 +1566,21 @@ export default function Home() {
   }, [poolsBusy]);
 
   const ensureWallet = useCallback(async (): Promise<GenAccount> => {
-    if (!ready || !identity) {
+    if (!ready) {
       throw new Error("Identity isn't ready yet — give it a second and try again.");
     }
+    if (!identity) {
+      // The keystore is encrypted at rest (review item 10), so a locked or
+      // unconfigured browser has no signer until the user unlocks it. Say so
+      // precisely instead of a generic "not ready".
+      throw new Error(
+        status === "locked"
+          ? "Your identity is locked. Open the identity menu (top right) and enter your passphrase to sign."
+          : "Set up an identity first — open the identity menu (top right) to create or import one.",
+      );
+    }
     return identity.account;
-  }, [identity, ready]);
+  }, [identity, ready, status]);
 
   const tvl = TIERS.reduce((acc, t) => {
     const p = pools[t];
@@ -1621,7 +1680,18 @@ export default function Home() {
           <PoolBars pools={pools} tvl={tvl} />
 
           <p className="hero-addr">
-            <b>Contract</b> {PROOFMARK_ADDRESS ?? "not configured"}
+            <b>Contract</b>{" "}
+            {PROOFMARK_ADDRESS ? (
+              <a
+                href={explorerAddressUrl(PROOFMARK_ADDRESS)}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {PROOFMARK_ADDRESS}
+              </a>
+            ) : (
+              "not configured"
+            )}
             {PROOFMARK_ADDRESS && (
               <>
                 {" · "}

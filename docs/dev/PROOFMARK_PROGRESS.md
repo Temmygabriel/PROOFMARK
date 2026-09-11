@@ -17,6 +17,30 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **FIX-21 — Project Explorer punch list remediated (2026-09-11):** the reviewer returned a
+  **conditional pass with a 12-item punch list**. Root of most of it: a **reverted payable
+  call on GenLayer does not return the attached value** — proven by the reviewer's live tx
+  `0x429b0177…ab752f`, a funded `issue_policy` that finalized GENVM RESULT: ERROR, created
+  no policy, and left the 0.06 GEN premium in the contract (explorer balance 19.06 → 19.12,
+  no ledger entry). Fix is structural: **no payable call may revert on a caller-fixable
+  condition.** New `_reject_payable` (contract:660) refunds the full attached value in the
+  SAME transaction over the external EthSend rail and records the reason in the
+  `payable_rejections` TreeMap, read back via `get_rejection(payer, job_id)`; all 18
+  `issue_policy` + `deposit` + `file_claim` rejection branches now return through it. Also
+  in this batch: `get_accounting(tier)` reconciles the on-chain balance with the internal
+  ledger; **payout is now `coverage_atto` in full** (was `min(coverage, 10% of pool at
+  settlement)`, so an LP withdrawal could shrink advertised cover) with a three-invariant
+  solvency proof in-source; reputation counters move from `issue_policy` to the agent's own
+  `accept_job` (a third party can no longer inflate an unwilling agent's tier for free);
+  `_probe_evidence` verifies fetched bytes against the CID and returns an explicit state
+  (ok / not_found / integrity / oversized / non_text / unavailable) instead of silently
+  judging truncated UTF-8; four redundant IPFS gateways; frontend custody moves from a raw
+  `localStorage` private key to a **PBKDF2-SHA256 (310k) + AES-GCM-256 encrypted keystore**;
+  the UI now surfaces the precise rejection reason and an explorer tx link for every payable
+  write; `requirements-dev.txt` + `gltest.config.yaml` pin the test setup. Suite **67/67**,
+  `genvm-lint` clean, `tsc --noEmit` clean. Full item-by-item mapping:
+  `docs/PROOFMARK_REVIEW_REMEDIATION.md`. **Note: the canonical 0x65319a27 predates FIX-21**
+  — a fresh deploy of the current source is the last open item.
 - **PAYOUT-FIX-20 — EOA payout bug found + fixed + re-proven live (2026-09-08, commit
   `349e071`):** the user reported a demo payout "didn't happen, the buyer never got paid".
   Ground truth: every Proofmark payee is a plain EOA wallet, but the money-out sites paid

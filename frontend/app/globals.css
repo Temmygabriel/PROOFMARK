@@ -914,6 +914,33 @@ select.input option {
   font-family: var(--font-mono);
 }
 
+/* Review item 4: every write result links to the transaction that proves it --
+   for a rejection, that link is the evidence the refund actually happened. */
+.notice-link {
+  display: inline-block;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--proof);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+.notice-link:hover {
+  opacity: 0.8;
+}
+
+.hero-addr a {
+  color: var(--proof);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.hero-addr a:hover {
+  opacity: 0.8;
+}
+
 /* --------------------------------------------------------------- footnote */
 
 .footnote {

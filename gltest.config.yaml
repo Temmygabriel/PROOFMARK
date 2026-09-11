@@ -1,0 +1,24 @@
+# Proofmark -- genlayer-test / GLTest configuration.
+#
+# Review item 11: committed so `python -m pytest tests/direct/` (and any GLTest
+# integration run) resolves the same networks, directories and artifacts from a
+# clean checkout instead of depending on whatever the local CLI last selected.
+#
+# Schema note: gltest_cli accepts exactly three root keys -- `networks`,
+# `paths`, `environment` -- and `networks` MUST contain a `default` entry.
+# `localnet`, `studionet` and `testnet_bradbury` are preconfigured by
+# genlayer-test (with its own throwaway accounts), so listing them with no body
+# inherits those settings. The direct-mode suite is in-memory and never dials a
+# node; the network entries exist for the e2e harness under `e2e/`.
+
+networks:
+  default: localnet
+  localnet:
+  studionet: {}
+  testnet_bradbury: {}
+
+paths:
+  contracts: intelligent-contracts
+  artifacts: artifacts
+
+environment: .env
