@@ -7,67 +7,67 @@ deployment actually succeeded.
 
 | Network | Chain ID | Contract address | Deployed | E2E verified |
 |---------|----------|------------------|----------|--------------|
-| **StudioNet** | 61999 | **`0x65319a2787BE8a57ee570fD0eB61A69887D91099`** | 2026-09-08 | ✅ **PAYOUT-FIX-20** — full §05 demo loop register→fund→issue→accept→deadline→file_claim payout on-chain; the claim's **two child transfers are clean EthSend credits to the buyer EOA (1.000000 + 2.000000 GEN), FINALIZED, no Execution ERROR** (`e2e/results/demo-payout.log`) — see [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) |
-| Testnet Bradbury | 4221 | **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** | 2026-09-08 | deploy-only read-verified — **fixed Proofmark** from a minified build (see note) |
+| **StudioNet** | 61999 | **`0x849b576f64ecA308300D278223951E4A88e1B5D4`** | 2026-09-12 | ✅ **FIX-22** — deploy tx `0x1ea533ada62af64d5e85a4a06033bf481fa9a0b25ef25e9a04ac4529f37e6c69`, validators AGREE; CLI 0.37.1; **74/74** direct tests + `genvm-lint` clean. Live e2e + demo logs in `e2e/results/` — see [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) |
+| Testnet Bradbury | 4221 | **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** | 2026-09-08 | **superseded for the FIX-22 model** — still the PAYOUT-FIX-20 minified build; a FIX-22 minified redeploy is outstanding |
 
-> The **canonical** StudioNet address above is the **fixed Proofmark** contract
-> (PAYOUT-FIX-20 + the Phase-7b hardening), deployed 2026-09-08 from
-> `intelligent-contracts/proofmark.py` (`class Proofmark`). **PAYOUT-FIX-20** is a
-> correctness fix, not hardening: every payee is a plain EOA, so the six money-out
-> sites now pay over the **external `@gl.evm.contract_interface` (`_EoaPay`) →
-> EthSend** rail (an IC-to-IC `PostMessage` to an empty address finalizes its child
-> with a "GenVM Execution ERROR" — value debited, wallet never credited). The demo
-> run on this address proves it live: `e2e/results/demo-payout.log`. Full evidence in
-> [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md).
+> The **canonical** StudioNet address above is **FIX-22**: GitHub URL+sha256
+> evidence (no IPFS), a paywalled `accept_job` that requires an agent bond of at
+> least the coverage, per-buyer/per-agent open-policy caps, a 90-day deadline
+> ceiling, and a penalty tier that sticks when no LP funds the penalty pool.
+> Deployed 2026-09-12 from `intelligent-contracts/proofmark.py` (`class Proofmark`)
+> with **CLI 0.37.1** — StudioNet requires that version; the global RC CLI
+> (0.40.0-rc.3) can neither deploy nor read there.
 >
-> **Superseded canonical (2026-09-08):** `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
+> **Superseded canonical (2026-09-08):** `0x65319a2787BE8a57ee570fD0eB61A69887D91099`
+> (PAYOUT-FIX-20 rail, CID evidence, unbonded `accept_job`). Its pool could be
+> drained by a two-wallet buyer/agent pair, and its evidence model required an IPFS
+> pin — both fixed in FIX-22.
+>
+> **Superseded canonical (2026-09-08, earlier):** `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
 > ran the **pre-fix** code — its "settled payout" moved the pool ledger but never
 > EOA-credited the buyer. Replaced by `0x65319a27…`.
 >
-> **Bradbury note (resolved 2026-09-08):** the canonical `proofmark.py` (72,965 B) exceeds
-> Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest known-good
-> ~39,869 B), which long blocked a fresh deploy. The fixed Proofmark is now live on
-> Bradbury from a **minified build** — `intelligent-contracts/proofmark-bradbury.py`, **36,811 B** (strips
-> only full-line comments / trailing comments / blank lines / docstrings, never any code or
-> string-literal byte). Equivalence is machine-checked by `e2e/minify_contract.py`
-> (code-token identity + ast.parse + fixed-point gates), `genvm-lint check` is clean
-> (`Proofmark`, 20 methods), and the **56/56 direct tests pass against the build** — so the
-> Bradbury bytecode is behaviorally identical to the canonical StudioNet artifact
-> (`0x65319a27…`, source sha256 `1b7b1cba2223ff42f5d9628dbc38c9079366807ebe0c6224d3f4201b3eb6356f`).
-> The deploy is **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** (tx
-> `0xfd0b7d926bf57914193aab7b07bc56a2d7a679e3ee1b0a0771127e6c8962b02b`, `ACCEPTED`/`AGREE`,
-> read-verified `get_pool_info` across tiers). Superseded: `0xA2aA8451…` (pre-fix
-> minified, 2026-09-08) and the pre-rename Shape A `0x79C15889…` (2026-09-03).
+> **Bradbury note (resolved 2026-09-08, needs refresh):** the canonical `proofmark.py`
+> exceeds Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest
+> known-good ~39,869 B), which long blocked a fresh deploy. The live Bradbury
+> deployment is a **minified build** — `intelligent-contracts/proofmark-bradbury.py`
+> (strips only full-line comments / trailing comments / blank lines / docstrings,
+> never any code or string-literal byte). Equivalence is machine-checked by
+> `e2e/minify_contract.py` (code-token identity + ast.parse + fixed-point gates).
+> The address above still carries the **PAYOUT-FIX-20** build; regenerating and
+> deploying the FIX-22 minified build is outstanding.
+>
+> **Rebrand outcome (2026-09-06, historical):** the rename to `proofmark.py` /
+> `class Proofmark` was a new deploy artifact. The pre-rename Shape B deploy
+> (`0x589472da571Db60151100b153D65a7170367E17D`, StudioNet e2e **37/37** PASS on
+> 2026-09-06) is kept as the historical pre-rename validation.
 
-- Deploy account (`default`): `0xa881365a99d77be904e414ae610e22938bb0466d`
-- The hardened **37-step run** exercised register, LP deposit, quoting, 3× payable
-  policy issuance, deliverable submit (canonical CID only), all negative/gate
-  reverts (past **and** sub-60 s deadlines), expire, auto-breach claim + payout,
-  counters, and LP withdraw to pool 0. Money rows: deposit credits the pool, the
-  upheld claim debits it **exactly 1.000000 GEN** (20.12 → 19.12), the full
-  withdrawal releases the rest.
-- The earlier (pre-hardening) rebranded deploy `0x1c91f37F…` (2026-09-06) also holds
-  a **10/10 verify-payments** log (LP round-trip pool 0→5→0; upheld claim debits pool
-  1.000000 GEN) — kept as historical, superseded by the hardened 37/37.
-- Historical runs (not canonical, kept for provenance): Shape A 28/28 on
-  `0x605e5BE4…` (2026-09-03); pre-rename Shape B 37/37 on `0x589472da…` (2026-09-06).
-  Do **not** use the 2026-09-02 generation (`0xED90…` StudioNet, `0xcBF4…`
-  Bradbury) — it runs the unpatched source.
+- Deploy account (`deployer`): `0xa881365a99d77be904e414ae610e22938bb0466d`
+- The FIX-22 run exercises register, LP deposit, quoting, payable issuance,
+  **agent accept + coverage bond**, deliverable submit (commit-pinned GitHub
+  URL+sha256 only), foreign-host and tampered-evidence refusals, all negative/gate
+  reverts (past **and** sub-60 s deadlines), expire, auto-breach claim + payout
+  **drawn from the agent bond with the pool unchanged**, counters, and LP withdraw.
+- Historical runs (not canonical, kept for provenance): PAYOUT-FIX-20 56/56 on
+  `0x65319a27…` (2026-09-08); pre-hardening rebranded `0x1c91f37F…` 37/37 + 10/10
+  (2026-09-06); Shape A 28/28 on `0x605e5BE4…` (2026-09-03); pre-rename Shape B
+  37/37 on `0x589472da…` (2026-09-06). Do **not** use the 2026-09-02 generation
+  (`0xED90…` StudioNet, `0xcBF4…` Bradbury) — it runs the unpatched source.
 
 ### Explorer links
 
-- StudioNet: `https://explorer-studio.genlayer.com/address/0x65319a2787BE8a57ee570fD0eB61A69887D91099`
+- StudioNet: `https://explorer-studio.genlayer.com/address/0x849b576f64ecA308300D278223951E4A88e1B5D4`
 - Bradbury:
   `https://explorer-bradbury.genlayer.com/address/0xE76AF22aea26A84dB11e87FB946060B02F490217`
 
 ## Frontend environment variables
 
 The Next.js frontend reads these at build time (set them in Vercel). The live
-Vercel deployment points at **StudioNet** (gasless) — set the **fixed** canonical
-address (the reviewer-facing env must be flipped to `0x65319a27…`):
+Vercel deployment points at **StudioNet** (gasless) — set the **FIX-22** canonical
+address:
 
 ```env
-NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x65319a2787BE8a57ee570fD0eB61A69887D91099
+NEXT_PUBLIC_PROOFMARK_CONTRACT_ADDRESS=0x849b576f64ecA308300D278223951E4A88e1B5D4
 NEXT_PUBLIC_PROOFMARK_NETWORK=studionet
 ```
 

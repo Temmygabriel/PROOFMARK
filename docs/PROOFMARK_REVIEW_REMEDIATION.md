@@ -6,13 +6,17 @@ test that would fail if the fix regressed. It is written to be checkable, not to
 be believed: every claim below names a file, a method, and a test.
 
 Contract under review: `intelligent-contracts/proofmark.py` (`class Proofmark`).
-Test suite: `tests/direct/test_proofmark.py` — **67 tests, all passing**
+Test suite: `tests/direct/test_proofmark.py` — **74 tests, all passing**
 (`python -m pytest tests/direct/ -q`), lint-clean
-(`python -m genvm_linter.cli check intelligent-contracts/proofmark.py` →
+(`genvm-lint check intelligent-contracts/proofmark.py` →
 22 methods: 9 view / 13 write).
 
 The fix series is tagged **FIX-21** in the source, and the batch is referred to
-below as *the remediation*.
+below as *the remediation*. A later adversarial pass — **FIX-22** — closes the
+self-dealing drain and replaces the IPFS evidence model; it is documented in
+[the FIX-22 section at the end](#fix-22--self-dealing-drain-closed-github-evidence-model)
+rather than woven into the per-item mapping below, which is unchanged and still
+accurate for the items it covers.
 
 ---
 
@@ -256,6 +260,12 @@ False`); a **transient** (`unavailable`) on either side raises
 
 ### 9. Evidence-source redundancy
 
+> **Superseded by FIX-22 (§16).** The four-gateway IPFS list below was replaced
+> by a single allowlisted host with a commit-pinned URL — one host is narrower
+> than four gateways and no less available, because a `raw.githubusercontent.com`
+> read of a 40-char commit is as permanent as the commit itself. Kept here for
+> provenance: it documents what the code did when this review was written.
+
 **Fix.** `EVIDENCE_GATEWAYS` (contract:288) — four independent public IPFS
 gateways, tried in a **fixed order** (deterministic across validators, no
 shuffling):
@@ -325,16 +335,17 @@ opaquely at the SDK.
 
 ### 12. Tests covering each remediation
 
-67 tests, listed by remediation:
+The remediation batch added the tests below; the FIX-22 pass added seven more
+(§13). Suite total today: **74 tests, all passing**.
 
 | Remediation | Test(s) |
 |---|---|
 | failed payable execution / value recovery | `test_rejected_payable_never_retains_value` (1805), `test_successful_payable_clears_stale_rejection` (1868) |
 | coverage conservation | `test_claim_pays_full_coverage_even_after_pool_shrinks` (771), `test_accounting_reconciles_with_contract_balance` (837) |
 | reputation rollback | `test_reputation_uninflatable_without_agent_consent` (1917), `test_voided_policies_never_inflate_reputation` (1963) |
-| CID-integrity mismatch | `test_cid_integrity_mismatch_is_refused_not_judged` (2061), `test_cid_integrity_mismatch_on_buyer_spec_rejects_claim` (2108) |
-| oversized / non-text evidence | `test_non_text_evidence_refused_at_submit` (1998), `test_non_text_deliverable_at_judge_is_breach` (2024), `test_spec_oversized_at_judge_is_rejected` (1567), `test_oversized_cid_rejected` (1117) |
-| gateway failure | `test_rate_limit_maps_to_transient` (1487), `test_spec_unavailable_at_judge_is_rejected_not_breach` (1531) |
+| evidence-integrity mismatch (was CID) | `test_evidence_integrity_mismatch_is_refused_not_judged`, `test_evidence_integrity_mismatch_on_buyer_spec_rejects_claim` |
+| oversized / non-text evidence | `test_non_text_evidence_refused_at_submit` (1998), `test_non_text_deliverable_at_judge_is_breach` (2024), `test_spec_oversized_at_judge_is_rejected` (1567) |
+| evidence-host failure | `test_rate_limit_maps_to_transient` (1487), `test_spec_unavailable_at_judge_is_rejected_not_breach` (1531) |
 | validator disagreement | `test_validator_rejects_divergent_leader` (2141) |
 | full paid lifecycle | `test_full_paid_lifecycle_quote_to_payout` (2176) |
 
@@ -353,12 +364,157 @@ settlement on a live network. What is proven live and what is not:
 
 | Claim | Status |
 |---|---|
-| Deterministic core, 67 tests, lint-clean | **proven locally** |
-| ETH-rail payout to a buyer EOA (EthSend children FINALIZED) | **proven live** on canonical `0x65319a27…` — see [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) |
-| Reject-and-refund payable shape (FIX-21) on a live network | **pending** — the canonical address predates FIX-21; a fresh deploy of the current source is required and is the last open item |
-| Live **judged** claim (deliverable present → consensus verdict → payout) | **pending** — same fresh deploy |
+| Deterministic core, 74 tests, lint-clean | **proven locally** |
+| ETH-rail payout to a buyer EOA (EthSend children FINALIZED) | **proven live** on `0x65319a27…` (PAYOUT-FIX-20) |
+| Reject-and-refund payable shape (FIX-21) on a live network | **proven live** on canonical `0x849b576f…` — the e2e's past-deadline issue and premature claim both reverted-to-refund with "the contract retained nothing", pool balance unchanged across each |
+| Agent bond funds the payout; LP pool untouched (FIX-22a) | **proven live** on `0x849b576f…` — auto-breach claim left the pool at **20.1200 GEN** (both premiums kept, zero LP capital paid out) with all bonds returned |
+| Commit-pinned GitHub evidence accepted; foreign host refused (FIX-22b) | **proven live** on `0x849b576f…` — foreign-host `submit_deliverable` reverted; a shape-valid commit-pinned URL was accepted |
+| Live **judged** claim (deliverable present → LLM consensus verdict → payout) | **pending** — needs a real commit-pinned GitHub spec+deliverable pair (see `verify-payments.js` V3) |
 
-The current canonical addresses were deployed from a **pre-FIX-21** source, so
-they do not carry this remediation. A fresh deploy of the reviewed source, with
-the §05 demo loop and a live judged claim re-run against it, is the closing
-step; until it lands, the live column above says exactly that.
+Canonical StudioNet is `0x849b576f64ecA308300D278223951E4A88e1B5D4`, deployed
+2026-09-12 from this source (tx
+`0x1ea533ada62af64d5e85a4a06033bf481fa9a0b25ef25e9a04ac4529f37e6c69`, validators
+AGREE) and exercised by the 44-step live e2e — see
+[PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) and
+[PROOFMARK_DEPLOYMENT.md](PROOFMARK_DEPLOYMENT.md).
+
+---
+
+## FIX-22 — self-dealing drain closed, GitHub evidence model
+
+A second adversarial pass, after the remediation above shipped, found one
+economic hole and one usability problem. Both are fixed in the source tagged
+**FIX-22** and live on the canonical StudioNet address.
+
+### 13. The self-dealing drain (FIX-22a) — the one real economics bug
+
+**The hole.** `accept_job` was free. A single controller holding two wallets — a
+buyer and the agent it registers — could issue a policy, let it go unclaimed
+past its deadline, file the auto-breach claim, and collect `0.94 × coverage`
+**out of the LP pool**, having paid only the premium. Repeat until the pool is
+empty. No AI judgment is needed, so nothing about the evidence model stops it;
+the victim is the LP, and the exploit is a loop.
+
+**The fix.** `accept_job` is now **payable** and requires the agent to post a
+bond of **at least the coverage** (`intelligent-contracts/proofmark.py:1147`):
+
+```python
+if paid < coverage_atto:
+    self._reject_payable(
+        f"[EXPECTED] agent bond must be at least the coverage "
+        f"({coverage_atto} atto); got {paid} atto",
+        job_id,
+    )
+    return
+...
+policy.agent_bond_atto = u256(paid)   # held, NOT credited to the pool
+```
+
+On an upheld breach the bond — never tier capital — pays the buyer
+(`proofmark.py:1790`), and the pool is credited the forfeited bond so it is made
+whole:
+
+```
+tier_balance = pool_value + bond − payout = pool_value
+```
+
+Excess bond above the coverage is refunded in-call. The exploit round now ends
+at `seed + premium` for the attacker with the pool unchanged, i.e. strictly
+value-destroying rather than a `+0.94 × coverage` drip. On expiry (not a breach)
+the bond is returned to the agent — `test_agent_bond_refunded_on_expiry` — and on
+a rejected claim the agent's bond is likewise returned while the buyer's claim
+bond is forfeited to the pool.
+
+**Tests.** `test_self_dealing_round_is_value_destroying`,
+`test_accept_requires_agent_bond`, `test_agent_bond_refunded_on_expiry`,
+`test_claim_judged_rejected_bond_forfeited`.
+
+### 14. Throughput caps (FIX-22b) and a deadline ceiling (FIX-22c)
+
+The bond makes a round *unprofitable*, but an attacker with capital could still
+open unbounded parallel rounds, each locking LP exposure (an availability /
+capital-lockup attack rather than a theft). Two bounds close that:
+
+- `MAX_OPEN_POLICIES_PER_BUYER = 10` (`proofmark.py:303`) — counted at
+  `issue_policy` (`proofmark.py:1093`), so a buyer cannot exceed ten live
+  policies.
+- `MAX_OPEN_POLICIES_PER_AGENT = 10` (`proofmark.py:304`) — counted only at
+  `accept_job` (`proofmark.py:1191`), because a policy the agent never accepts
+  imposes no exposure on the agent. Both counters are released by
+  `_close_policy` (`proofmark.py:1484`).
+
+- `MAX_DEADLINE_HORIZON_SECONDS = 90 * 24 * 60 * 60` (`proofmark.py:308`) — a
+  ceiling *and* the existing 60 s floor (`MIN_DEADLINE_HORIZON_SECONDS`,
+  `proofmark.py:323`). Without a ceiling a buyer could lock exposure for years,
+  which is the same lockup attack in slow motion.
+
+**Tests.** `test_buyer_open_policy_cap`, `test_agent_open_policy_cap`.
+
+### 15. Penalty tier sticks (FIX-22d)
+
+`_best_funded_tier_at_or_below` (`proofmark.py:833`) no longer falls through a
+**demoted chronic breacher** to `TIER_UNRATED` when no LP has funded the penalty
+pool. A demoted agent could previously escape the penalty rate by simply not
+attracting penalty-tier capital. It now stays at the penalty tier regardless.
+
+**Test.** `test_penalty_tier_sticks_without_funded_pool`.
+
+### 16. Evidence is a commit-pinned GitHub URL + sha256 (FIX-22, usability)
+
+**The problem with IPFS CIDs.** The prior model asked the user to pin a file to
+IPFS and paste a CID. An ordinary buyer has no way to pin, no way to tell a dead
+gateway from a dead CID, and no way to see what they were about to commit to —
+and the four-gateway fallback list was a convenience, never a trust anchor.
+
+**The replacement.** Evidence is now `(url, sha256)` where `url` must be
+
+```
+https://raw.githubusercontent.com/<owner>/<repo>/<40-hex-commit>/<path>
+```
+
+enforced by `_canonical_evidence_url` (`proofmark.py:436`): https only, the
+allowlisted `EVIDENCE_HOST = "raw.githubusercontent.com"` (`proofmark.py:363`),
+no query and no fragment, no whitespace, a shape-checked owner/repo, a **full
+40-character lowercase commit SHA in the commit slot** (a branch or tag is
+refused, because the whole immutability argument rests on that segment), a
+non-empty path, and a length bound `MAX_EVIDENCE_URL_LEN = 320`
+(`proofmark.py:375`). `_canonical_sha256` (`proofmark.py:490`) requires exactly
+64 lowercase hex characters.
+
+**Why it is stronger, not just easier.** A branch moves; a commit does not. The
+buyer cannot later argue about what was promised, because the promise is a
+content-addressed read of an immutable revision. The sha256 is checked **twice**:
+once in the browser before signing (the UI fetches the raw URL with
+`crypto.subtle.digest` and shows the bytes' fingerprint — possible because
+`raw.githubusercontent.com` returns `Access-Control-Allow-Origin: *`), and again
+on-chain.
+
+**The live probe.** `submit_deliverable` (`proofmark.py:1385`) re-fetches the
+URL through `_probe_or_reason` (`proofmark.py:1357`) and **refuses the
+submission unless the served bytes hash to the committed sha256**. This moves
+the failure onto the agent's own transaction: a dead or doctored link costs the
+agent its gas and nothing else, instead of surfacing later on the buyer's claim
+after the bond was already escrowed. `submit_deliverable` is deliberately
+non-payable, so a refusal is value-safe.
+
+**Tests.** `test_evidence_integrity_mismatch_is_refused_not_judged`,
+`test_evidence_integrity_mismatch_on_buyer_spec_rejects_claim`,
+`test_non_text_evidence_refused_at_submit`, `test_spec_oversized_at_judge_is_rejected`.
+
+### FIX-22 live evidence
+
+Canonical StudioNet `0x849b576f64ecA308300D278223951E4A88e1B5D4` (deploy tx
+`0x1ea533ada62af64d5e85a4a06033bf481fa9a0b25ef25e9a04ac4529f37e6c69`, validators
+AGREE). `node e2e/run.js e2e --network studionet` → **44/44 steps passed**;
+direct suite **74/74**; `genvm-lint check` clean (22 methods: 9 view, 13 write).
+The run's load-bearing assertion is the FIX-22 money line:
+
+```
+[PASS] pool made whole by the bond (keeps both premiums, pays no LP capital)
+       -- balance=20.1200 GEN (want 20.1200 GEN) locked=0.0000 GEN
+[PASS] all agent bonds returned (escrow 0) -- escrow=0.0000 GEN
+```
+
+The Bradbury deployment still carries the PAYOUT-FIX-20 minified build; a FIX-22
+minified redeploy is outstanding and is tracked in
+[PROOFMARK_DEPLOYMENT.md](PROOFMARK_DEPLOYMENT.md).

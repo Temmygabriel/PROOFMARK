@@ -4,6 +4,50 @@ Local working notes. This file holds facts that are easy to lose between
 sessions: deployed addresses, network quirks, tooling gotchas, and the
 reasoning behind decisions. Update it whenever something notable changes.
 
+## FIX-22 banner — agent bond + GitHub evidence, new StudioNet canonical (2026-09-12)
+
+**Current canonical StudioNet: `0x849b576f64ecA308300D278223951E4A88e1B5D4`** (deploy tx
+`0x1ea533ada62af64d5e85a4a06033bf481fa9a0b25ef25e9a04ac4529f37e6c69`, validators AGREE,
+deployed with **CLI 0.37.1**). Supersedes `0x65319a27…`.
+
+Two things define FIX-22, and both are the kind of thing a later session must not undo:
+
+1. **`accept_job` is payable and requires an agent bond ≥ the coverage.** Before this, a
+   buyer wallet + a colluding agent wallet under one controller could issue a policy, let
+   the deadline pass unclaimed, file the auto-breach claim and collect the payout **from the
+   LP pool** — a loop that drains LPs with no AI judgment involved. The bond now funds the
+   payout and the forfeited bond is credited to the pool, so the round ends at
+   `tier_balance = pool_value + bond − payout = pool_value` (the attacker gains nothing and
+   loses the premium). Live proof: `e2e/results/e2e-fix22.log` →
+   `pool made whole by the bond (keeps both premiums, pays no LP capital) -- balance=20.1200
+   GEN (want 20.1200 GEN) locked=0.0000 GEN` and `all agent bonds returned (escrow 0)`.
+   Regression test: `test_self_dealing_round_is_value_destroying`.
+2. **Evidence is a commit-pinned GitHub raw URL + the sha256 of its exact bytes — no IPFS.**
+   `EVIDENCE_HOST = "raw.githubusercontent.com"`; the URL must name a **full 40-char lowercase
+   commit SHA** (a branch is refused — the immutability argument rests on that segment), be
+   https, carry no query/fragment/whitespace, and be ≤ `MAX_EVIDENCE_URL_LEN = 320`.
+   `submit_deliverable` re-fetches the URL and refuses the submission unless the served bytes
+   hash to the committed digest, so a dead/doctored link fails on the **agent's own**
+   transaction rather than on the buyer's later claim. The frontend computes the same sha256
+   in-browser with `crypto.subtle` (the host sends `Access-Control-Allow-Origin: *`, so no
+   proxy is needed) and shows size + hash + preview before the user signs.
+
+Also in FIX-22: `MAX_OPEN_POLICIES_PER_BUYER` / `_PER_AGENT` = 10 (counted at issue for the
+buyer, at **accept** for the agent — an unaccepted policy imposes no agent exposure);
+`MAX_DEADLINE_HORIZON_SECONDS` = 90 days as a ceiling over the existing 60 s floor;
+`_best_funded_tier_at_or_below` no longer falls through a demoted chronic breacher to
+`unrated`. Suite **74/74**; `genvm-lint` clean (22 methods: 9 view, 13 write).
+
+Live board after re-seeding (`e2e/seed-live.js`, agent + job `…live-1789232711989`):
+Unrated 10.06 (1 GEN locked) / Bronze 5 / Silver 3 / Gold 2, with a 1 GEN agent bond
+escrowed. `frontend/app/page.tsx`'s `SEEDED_CONTRACT` / `SEED_TS` / `SEED_ACTIVITY` are
+baked to exactly this run — rebake them if the board is re-seeded.
+
+**Gotcha found this pass:** `e2e/run.js`'s `desiredAddress()` prefers a recorded
+`e2e/results/<net>.address` file over the `NETS` constant, so `seed-live.js` (which passes
+no `--address`) silently targeted a **stale** deploy until that file was rebaked. If a
+harness prints an address you don't recognise, check that file first.
+
 ## PAYOUT-FIX-20 banner — EOA payouts now over the external EthSend rail (2026-09-08)
 
 **A real money bug was found + fixed + re-proven live (commit `349e071`).** Every
@@ -112,8 +156,8 @@ is superseded by this doc for deploy decisions.
 ## Deployed contract addresses
 
 **Canonical — Proofmark, FIXED artifact, PAYOUT-FIX-20 (`proofmark.py`, `class Proofmark`):**
-- **StudioNet (canonical LIVE — §05 demo loop + settled payout over the external EthSend rail; `page.tsx` + Vercel env point at this):**
-  `0x65319a2787BE8a57ee570fD0eB61A69887D91099` (deployed 2026-09-08 via `run.js deploy`).
+- **StudioNet (SUPERSEDED by FIX-22 `0x849b576f…` — do not point `page.tsx` or the Vercel
+  env here):** `0x65319a2787BE8a57ee570fD0eB61A69887D91099` (deployed 2026-09-08 via `run.js deploy`).
   - **§05 loop on it** (`e2e/results/demo-payout.log` + `demo-payout.json`): agent
     `agent-live-1788895030112`, job `job-live-1788895030112` (1 GEN cover @ 0.06) —
     register → fund 10/5/3/2 → issue → accept → deadline passed (nothing delivered) →

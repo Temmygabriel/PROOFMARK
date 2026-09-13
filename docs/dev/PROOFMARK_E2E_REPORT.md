@@ -1,18 +1,21 @@
 # Proofmark — Real-Network E2E Test Report
 
 > **Status: historical report (pre-rename Shape A era, 2026-09-02/03).** The runs
-> below predate the Shape B hardening and the product rebrand to Proofmark. The
-> **canonical, current** live evidence for the rebranded Proofmark contract
-> (`intelligent-contracts/proofmark.py`) is in
-> [../PROOFMARK_LIVE_EVIDENCE.md](../PROOFMARK_LIVE_EVIDENCE.md): StudioNet
-> `0x1c91f37F3ec428EcBf4B0A5698bFFf0c9D85f0c3`, **37/37** e2e + **10/10**
-> verify-payments + seeded live board (2026-09-06). The Shape B pre-rename run
-> (37/37 on `0x589472da…`, 2026-09-06) is also recorded there. This page keeps the
-> outcome-detection write-up (§4) and the historical Shape A numbers.
-> **2026-09-08 (PAYOUT-FIX-20):** the canonical is now the **fixed** StudioNet deploy
-> `0x65319a27…` (external EthSend rail; pre-fix `0x850F…`/`0xA2aA…` superseded) — see
-> [../PROOFMARK_LIVE_EVIDENCE.md](../PROOFMARK_LIVE_EVIDENCE.md). Everything on this
-> page predates that fix and is kept as history.
+> below predate the Shape B hardening, the product rebrand to Proofmark, and every
+> fix since. The **canonical, current** live evidence is in
+> [../PROOFMARK_LIVE_EVIDENCE.md](../PROOFMARK_LIVE_EVIDENCE.md). Chain of
+> canonicals, newest first:
+> - **FIX-22 (2026-09-12, current):** StudioNet `0x849b576f64ecA308300D278223951E4A88e1B5D4`
+>   — commit-pinned GitHub URL+sha256 evidence, payable `accept_job` with an agent
+>   bond ≥ coverage, throughput caps, 90-day deadline ceiling. **44/44** e2e steps
+>   (`e2e/results/e2e-fix22.log`).
+> - PAYOUT-FIX-20 (2026-09-08): `0x65319a27…` (external EthSend rail; pre-fix
+>   `0x850F…`/`0xA2aA…` superseded).
+> - Rebranded pre-hardening (2026-09-06): `0x1c91f37F…` — 37/37 + 10/10 + seeded board.
+> - Shape B pre-rename (2026-09-06): `0x589472da…` — 37/37.
+>
+> This page keeps the outcome-detection write-up (§4) and the historical Shape A
+> numbers; everything on it is history, not current state.
 
 Harness: `e2e/run.js` + `e2e/roundtrip.js` (genlayer-js — the same SDK the
 frontend uses, chosen because the `genlayer` CLI cannot attach `value` to

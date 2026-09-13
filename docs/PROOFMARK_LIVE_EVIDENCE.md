@@ -3,78 +3,135 @@
 Where the **Proofmark** contract (`intelligent-contracts/proofmark.py`,
 `class Proofmark`) is proven live on real GenLayer networks, with the tx hashes and
 step evidence behind that claim. Historical runs are kept below for context; the
-**current canonical** is the Phase-7b hardened artifact at the top of this page.
+**current canonical** is FIX-22 at the top of this page.
 
-## Current canonical — fixed Proofmark, PAYOUT-FIX-20 (2026-09-08)
+## Current canonical — FIX-22 (2026-09-12)
 
-The fixed `proofmark.py` — the **PAYOUT-FIX-20 external-EthSend-rail fix** plus the
-Phase-7b hardening (GPT-audit H-02 two-phase-claim fix, evidence custody split,
-FIX-16 impossible-acceptance, FIX-18 forever-pending release; see
-[PROOFMARK_CONTRACT.md](PROOFMARK_CONTRACT.md)) — is proven live on StudioNet by
-**one fresh deploy that carries the full §05 demo loop AND a settled payout whose
-EthSend children are verified**:
+The current `proofmark.py` — **commit-pinned GitHub URL + sha256 evidence**, the
+**agent bond** that closes the self-dealing drain, per-buyer/per-agent
+throughput caps, a 90-day deadline ceiling, and FIX-22d penalty-tier stickiness
+(see [PROOFMARK_REVIEW_REMEDIATION.md](PROOFMARK_REVIEW_REMEDIATION.md) §13–16)
+— is proven live on StudioNet:
 
 | Address | Role | On-chain proof |
 |---------|------|----------------|
-| **`0x65319a2787BE8a57ee570fD0eB61A69887D91099`** | **canonical live** — the address the frontend/env points at; funded board + a settled payout paid over the external rail | **§05 demo run** (`e2e/results/demo-payout.log` + `demo-payout.json`), 2026-09-08 |
+| **`0x849b576f64ecA308300D278223951E4A88e1B5D4`** | **canonical live** — the address the frontend/env points at | deploy tx `0x1ea533ada62af64d5e85a4a06033bf481fa9a0b25ef25e9a04ac4529f37e6c69`, validators **AGREE**; **44/44** live e2e steps (`e2e/results/e2e-fix22.log`) |
 
-> **Why a new canonical (PAYOUT-FIX-20).** The prior canonical `0x850F773B…` ran
-> **pre-fix** code: its planted payout settled the *pool ledger* (Unrated 10.06 →
-> 9.06) but paid the buyer through an IC-to-IC `PostMessage` — and because the buyer
-> is a plain EOA (no intelligent contract deployed), each transfer child finalized
-> with a **"GenVM Execution ERROR"**: value left the contract but never reached the
-> wallet. That is exactly the bug PAYOUT-FIX-20 fixes (six money-out sites converted
-> to the external `@gl.evm.contract_interface` `_EoaPay` → **EthSend** rail; see the
-> module docstring / [PROOFMARK_CONTRACT.md](PROOFMARK_CONTRACT.md) item 22).
-> `0x850F…` is superseded — do not point the frontend at it.
+Deployed 2026-09-12 with **CLI 0.37.1** (StudioNet requires that version — the
+global 0.40.0-rc.3 RC can neither deploy nor read there). StudioNet is gasless,
+so the run costs nothing but time.
 
-Deployed by `node e2e/run.js deploy --network studionet` from the fixed working
-tree (2026-09-08). GenVM contracts are consensus-stored (`eth_getCode` is not
-applicable on StudioNet), so every finalized write tx below — all on this address —
-is the proof the deployment executed.
+### Live e2e — 44/44 steps (`0x849b576f…`)
 
-### §05 demo loop + EthSend payout proof (`0x65319a27…`)
+`node e2e/run.js e2e --network studionet` walks the whole contract: register,
+address-binding revert, LP deposit, quoting, payable issuance (including a
+rejected and a past-deadline issuance that must **refund in-call**), agent
+accept + bond, deliverable submission, foreign-host refusal, the open-policy
+caps, premature-claim refusal, expiry, the auto-breach payout, and LP
+withdrawal. Final line:
+
+```
+=== STUDIONET E2E on 0x849b576f64ecA308300D278223951E4A88e1B5D4: 44/44 steps passed ===
+```
+
+The load-bearing assertions for the FIX-22 economics are:
+
+```
+[PASS] agent bond escrowed == coverage -- bond=1.0000 GEN
+[PASS] foreign-host 'deliverable' REVERTS (allowlisted evidence host only)
+[PASS] past-deadline issue refunded: pool unchanged, no policy
+[PASS] premature claim refunded: bond back, policy untouched
+[PASS] pool made whole by the bond (keeps both premiums, pays no LP capital)
+       -- balance=20.1200 GEN (want 20.1200 GEN) locked=0.0000 GEN
+[PASS] all agent bonds returned (escrow 0) -- escrow=0.0000 GEN
+```
+
+That fifth line is the whole point of FIX-22: an upheld breach paid the buyer
+**out of the agent's forfeited bond**, and the Unrated pool closed the round at
+exactly `20 + 2 premiums` — **zero LP capital spent**. The sixth confirms the
+escrow ledger nets to zero: every bond went to a payout or back to its agent,
+none is stranded.
+
+Direct-mode suite on this source: `python -m pytest tests/direct/ -q` →
+**74 passed**; `genvm-lint check` clean (22 methods: 9 view, 13 write).
+
+### §05 demo loop on the FIX-22 canonical
 
 Written by `node e2e/demo-payout.js` — the reviewer's exact path (submission note
-§05): register agent → LP funds Unrated 10 (+ Bronze 5 / Silver 3 / Gold 2) → issue
-1 GEN cover @ 0.06 premium, short deadline, CID spec → accept → deadline passes with
-nothing delivered → `file_claim` (2 GEN bond) → deterministic auto-breach. Every
-write finalized success; board re-read live from the contract. Agent
-`agent-live-1788895030112` (wallet in `e2e/live-keys.json`), job
-`job-live-1788895030112`.
+§05): register agent → LP funds Unrated 10 (+ Bronze 5 / Silver 3 / Gold 2) →
+issue 1 GEN cover @ 0.06 premium, short deadline, **commit-pinned GitHub spec** →
+agent accepts (posting the 1 GEN bond) → deadline passes with nothing delivered →
+`file_claim` (2 GEN bond) → deterministic auto-breach, no AI call.
 
-After the deadline passed with no deliverable, the claim resolved **upheld**: policy
-`claimed`, buyer paid **exactly 1.000000 GEN** from the Unrated pool, the 2 GEN bond
-refunded. Board re-read directly from the contract after settlement:
+All five checks pass (`e2e/results/demo-payout.log`):
 
-| Tier | Pool | Locked | Jobs |
-|------|------|--------|-----------|
-| unrated | 9.0600 GEN | 0.0000 GEN | 1 settled payout: `job-live-1788895030112` (1 GEN covered, NOT DELIVERED) |
-| bronze | 5.0000 GEN | — | — |
-| silver | 3.0000 GEN | — | — |
-| gold | 2.0000 GEN | — | — |
-| penalty | 0 | — | — |
+```
+[PASS] claim upheld
+[PASS] policy claimed
+[PASS] pool keeps its capital (bond funded the payout)
+[PASS] this run's lock released; nothing else left locked
+[PASS] no errored payout children (EthSend rail)
+```
 
-**The wallet-credit proof (StudioNet's best).** The `file_claim` tx
-`0xdeec2cf17c598a770ee272d5f9405dd84e2e4f11498272acd1b30f00da1aed00` triggered **two
-child transactions, both FINALIZED, both from the contract `0x65319a27…` → the buyer
-EOA `0xd7d4dcab3cc4bab91f7c77df38a50c98461dd1f7`**, carrying **1.000000 GEN** (the
-payout) and **2.000000 GEN** (the bond refund) — **no Execution ERROR** on either.
-This is the exact mechanism that failed on the pre-fix contract, where the same
-children finalized with a "GenVM Execution ERROR". The external **EthSend** rail is
-independently pinned by the direct-mode regression test
+This is the FIX-22 money claim, stated as arithmetic. The run began with Unrated
+at 10.0600 GEN and ended at **20.1200 GEN** — exactly `baseline + 10 GEN deposit +
+0.06 GEN premium`. The 1 GEN paid to the buyer on the upheld claim came **out of
+the agent's forfeited bond**, not out of the pool: had the payout debited LP
+capital the pool would have closed at 19.12, not 20.12. (The harness asserts
+these as deltas rather than absolute figures, so it is re-runnable on a board
+that already carries activity.)
+
+**Independently audited.** `node e2e/audit-receipts.mjs <txhash>…` re-reads any
+transaction's receipt and prints each validator's `mode` / `vote` /
+`execution_result`, because `FINALIZED` alone proves nothing — a reverted call
+finalizes too. For the load-bearing txs of this run the agreeing validators
+report execution **SUCCESS**:
+
+| tx | agreeing validators |
+|---|---|
+| `issue_policy` (`0x90c7007a…`) | 2 agree **SUCCESS**, 2 idle ERROR (ignored) |
+| `accept_job` + 1 GEN bond (`0x00e50ea4…`) | 3 agree **SUCCESS**, 1 idle ERROR (ignored) |
+| `file_claim` auto-breach (`0xb04b85f9…`) | 2 agree **SUCCESS**, 2 idle ERROR (ignored) |
+
+Note the `idle ERROR` entries: idle validators routinely report ERROR because they
+timed out and never ran the contract. Only validators that voted **agree** decide
+the committed outcome — a repo-wide rule documented at `e2e/run.js:150-163`. The
+same audit run against the two *negative* txs in the full e2e (foreign-host
+`submit_deliverable`, LP withdraw under locked exposure) shows the contrasting
+signature — **3/3 agreeing validators report ERROR** — so the harness demonstrably
+tells a real revert apart from an idle no-show rather than treating both as failure.
+
+### Superseded — fixed Proofmark, PAYOUT-FIX-20 (2026-09-08)
+
+| Address | Role | On-chain proof |
+|---------|------|----------------|
+| `0x65319a2787BE8a57ee570fD0eB61A69887D91099` | **superseded** — PAYOUT-FIX-20 rail, CID evidence, **unbonded** `accept_job` | §05 demo (`e2e/results/demo-payout.log` + `demo-payout.json`), 2026-09-08 |
+
+> **Why FIX-22 replaced it.** Its `accept_job` was free, so a buyer/agent pair
+> under one controller could issue a policy, let it lapse, collect the
+> auto-breach payout from the LP pool, and repeat — draining LPs with no AI
+> judgment involved. The agent bond (§13 of the remediation doc) makes that loop
+> value-destroying. Its evidence model also required an IPFS pin.
+
+> **Why PAYOUT-FIX-20 replaced `0x850F773B…`.** The earlier canonical ran
+> **pre-fix** code: its planted payout settled the *pool ledger* (Unrated 10.06 →
+> 9.06) but paid the buyer through an IC-to-IC `PostMessage` — and because the
+> buyer is a plain EOA (no intelligent contract deployed), each transfer child
+> finalized with a **"GenVM Execution ERROR"**: value left the contract but never
+> reached the wallet. PAYOUT-FIX-20 converted six money-out sites to the external
+> `@gl.evm.contract_interface` `_EoaPay` → **EthSend** rail — still the rail
+> FIX-22 pays over today (see [PROOFMARK_CONTRACT.md](PROOFMARK_CONTRACT.md)).
+
+The PAYOUT-FIX-20 run's durable contribution is the **wallet-credit proof**: the
+`file_claim` tx `0xdeec2cf17c598a770ee272d5f9405dd84e2e4f11498272acd1b30f00da1aed00`
+triggered **two child transactions, both FINALIZED, both from the contract → the
+buyer EOA `0xd7d4dcab3cc4bab91f7c77df38a50c98461dd1f7`**, carrying **1.000000 GEN**
+(the payout) and **2.000000 GEN** (the bond refund) — **no Execution ERROR** on
+either. This is the exact mechanism that failed on the pre-fix contract, where the
+same children finalized with a "GenVM Execution ERROR". The external **EthSend**
+rail is independently pinned by the direct-mode regression test
 `test_payouts_leave_over_external_ethsend_rail` (the run's traces show `EthSend`,
 never `PostMessage`).
-
-Demo txs (all `[PASS]`, `e2e/results/demo-payout.log`): register
-`0xdbea899cebadb59e8b9ab42697ea1f55c0ad152a86cd7ea2f43bdfd6a8ca1a6d`, deposits
-`0x22e25f1583264e876115de35ccbf23cac175901bc7501688af1ada67b3e56b84` (unrated 10) /
-`0x0a24075581505bcee11282259e5fac7f28cf64e5ca7033688644801fcc9f02fa` (bronze 5) /
-`0x1ad4315736e19101dcd26f631ec63ee6eda2045fd713cb5dae0a7086a9e9d10a` (silver 3) /
-`0x4d6df5c43a5a0b34b91f2d9c5f827dc33447471e9749c98a5a65343049eeeba4` (gold 2), issue
-`0x26ab2637c1f6cabdd1827ee833cbf87ab789207a8afc4f2ded64b8fdf11b53b8`, accept
-`0xd574fa1127ede36c3640f500d948d00f79c42e4f113b52f3deaff865edb8107a`,
-file_claim `0xdeec2cf17c598a770ee272d5f9405dd84e2e4f11498272acd1b30f00da1aed00`.
 
 ### Superseded pre-fix evidence (kept for context)
 
@@ -88,11 +145,10 @@ the conservation — but their payouts went over the IC-to-IC rail and therefore
 They are superseded by `0x65319a27…`, whose payout children are clean EthSend
 credits (above).
 
-### Direct-mode suite (2026-09-08)
+### Direct-mode suite (2026-09-08, PAYOUT-FIX-20 generation)
 
-`python -m pytest tests/direct/ -q` → **56 passed** (the current suite, including the
-H-02 two-phase and Phase-7b regression tests and the PAYOUT-FIX-20
-`test_payouts_leave_over_external_ethsend_rail`). `genvm-lint check` clean.
+`python -m pytest tests/direct/ -q` → **56 passed** at that generation. The
+current FIX-22 source runs **74 passing** (see the canonical section above).
 
 ## Pre-hardening canonical — rebranded artifact (2026-09-06, superseded)
 
@@ -170,10 +226,14 @@ the unpatched source.
    (`0xE76AF22a…`, minified build) which *would* host a value run, but Bradbury carries
    scarce testnet funds and a value run needs funding ~43 GEN across roles; it stays a
    documented residual unless the user opts to fund it.
-2. **(Resolved 2026-09-08, updated for the fix)** Bradbury Proofmark — the pre-fix
-   minified deploy (`0xA2aA…`) is superseded by the **fixed** minified build
-   `intelligent-contracts/proofmark-bradbury.py` (**36,811 B**) deployed to
-   `0xE76AF22aea26A84dB11e87FB946060B02F490217`. See the Bradbury section above.
+2. **(Updated for FIX-22)** Bradbury Proofmark — the pre-fix minified deploy
+   (`0xA2aA…`) was superseded by the **PAYOUT-FIX-20** minified build
+   (`intelligent-contracts/proofmark-bradbury.py`) deployed to
+   `0xE76AF22aea26A84dB11e87FB946060B02F490217`. That build **predates FIX-22**,
+   so it still has the unbonded `accept_job` and the CID evidence model; a FIX-22
+   minified rebuild + redeploy is outstanding (`node e2e/minify_contract.py`,
+   then deploy-only — Bradbury carries scarce testnet funds). StudioNet is the
+   canonical live proof of the FIX-22 model. See the Bradbury section above.
 3. **(Honest correction, 2026-09-08)** the superseded pre-fix canonical `0x850F…`
    (and Bradbury `0xA2aA…`) reported a "settled payout" that only moved the **pool
    ledger** — the buyer EOA was never credited, because the IC-to-IC rail cannot
@@ -181,11 +241,16 @@ the unpatched source.
    the very bug PAYOUT-FIX-20 fixes; the current canonical's payout children are clean
    EthSend credits. Prior docs' "buyer paid 1 GEN" phrasing on `0x850F…` referred to
    the ledger move only and is corrected here.
-4. **Live judged (V3) claim** — skipped: the evidence gateway `https://w3s.link/ipfs/`
-   does not resolve the pinned CIDs from this network (gateway migration: 403/429/504;
-   alternate gateways unreachable). The judged bond path (incl. the H-02 two-phase
-   split) is proven in direct-mode tests (**56/56** in `tests/direct/`) and the live
-   deterministic auto-breach payout (the §05 loop above).
+4. **Live judged (V3) claim** — the IPFS-gateway skip that blocked this is
+   **resolved by FIX-22**: evidence is now a commit-pinned GitHub URL, and
+   `raw.githubusercontent.com` is reachable from the validator set. What remains
+   is sourcing a *real* public spec + deliverable pair to judge against (the V3
+   path in `e2e/verify-payments.js` takes them as `REAL_SPEC_URL` /
+   `REAL_SPEC_SHA256` / `REAL_DELIV_URL` / `REAL_DELIV_SHA256`). Until that run
+   lands, the judged bond path is proven in direct-mode tests (74/74) and the
+   live deterministic auto-breach payout is proven live on the canonical
+   (above). The auto-breach path needs no AI call, so it proves the bond-funded
+   payout end to end without exercising validator judgment.
 
 ## Re-verify in one command
 

@@ -17,6 +17,41 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **FIX-22 — self-dealing drain closed + GitHub evidence model, live on a new canonical
+  (2026-09-12):** the user asked why the deliverable flow required IPFS at all
+  (*"if it's a nightmare for me the developer to use, imagine what it would be for users,
+  reviewer or audience"*) and to make the security airtight against sybil/gaming. Two
+  changes define this pass.
+  **(a) The one real economics bug.** `accept_job` was free, so a single controller holding
+  a buyer wallet and an agent wallet could issue a policy, let it lapse unclaimed, file the
+  auto-breach claim, and collect the payout **out of the LP pool** — repeating until the pool
+  was empty, with no AI judgment involved to stop it. `accept_job` is now **payable** and
+  requires an agent bond of **at least the coverage**; on an upheld breach that bond — never
+  tier capital — pays the buyer, and the forfeited bond is credited to the pool so it ends
+  the round whole (`tier_balance = pool_value + bond − payout = pool_value`). Excess bond is
+  refunded in-call; on expiry or a rejected claim the agent's bond is returned. The exploit
+  round now ends at `seed + premium` — value-destroying, not a `+0.94 × coverage` drip.
+  **(b) Evidence is a commit-pinned GitHub URL + sha256, not an IPFS CID.** The contract
+  accepts only `https://raw.githubusercontent.com/<owner>/<repo>/<40-hex-commit>/<path>`
+  (https only, no query/fragment/whitespace, shape-checked owner/repo, full commit SHA, path
+  required, ≤320 chars) paired with the sha256 of the exact bytes. `submit_deliverable`
+  re-fetches the URL and **refuses the submission unless the served bytes hash to the
+  committed digest** — the live probe moves failure onto the agent's own transaction instead
+  of the buyer's later claim. The UI does the same hash in the browser via `crypto.subtle`
+  (works because the host sends `Access-Control-Allow-Origin: *`), so the user *sees* what
+  they are committing to before signing. Alongside: `MAX_OPEN_POLICIES_PER_BUYER` /
+  `_PER_AGENT` = 10 (FIX-22b), a 90-day `MAX_DEADLINE_HORIZON_SECONDS` ceiling (FIX-22c),
+  and `_best_funded_tier_at_or_below` no longer falling through a demoted chronic breacher to
+  `unrated` (FIX-22d). Suite **74/74**, `genvm-lint` clean (22 methods: 9 view, 13 write),
+  `tsc --noEmit` + esbuild clean.
+  **Live:** deployed to StudioNet as **`0x849b576f64ecA308300D278223951E4A88e1B5D4`** (tx
+  `0x1ea533ada62af64d5e85a4a06033bf481fa9a0b25ef25e9a04ac4529f37e6c69`, validators AGREE,
+  CLI 0.37.1). `node e2e/run.js e2e` → **44/44 steps**, whose load-bearing line is
+  `pool made whole by the bond (keeps both premiums, pays no LP capital) -- balance=20.1200
+  GEN (want 20.1200)` plus `all agent bonds returned (escrow 0)`. Re-seeded the live board
+  (agent/job `…live-1789232711989`: Unrated 10.06 locked 1, Bronze 5, Silver 3, Gold 2, 1 GEN
+  bond escrowed) and rebaked the frontend seed feed to match. Supersedes `0x65319a27…`;
+  Bradbury still carries the PAYOUT-FIX-20 minified build (FIX-22 rebuild outstanding).
 - **FIX-21 — Project Explorer punch list remediated (2026-09-11):** the reviewer returned a
   **conditional pass with a 12-item punch list**. Root of most of it: a **reverted payable
   call on GenLayer does not return the attached value** — proven by the reviewer's live tx
@@ -39,8 +74,8 @@ Phase state (newest first):
   the UI now surfaces the precise rejection reason and an explorer tx link for every payable
   write; `requirements-dev.txt` + `gltest.config.yaml` pin the test setup. Suite **67/67**,
   `genvm-lint` clean, `tsc --noEmit` clean. Full item-by-item mapping:
-  `docs/PROOFMARK_REVIEW_REMEDIATION.md`. **Note: the canonical 0x65319a27 predates FIX-21**
-  — a fresh deploy of the current source is the last open item.
+  `docs/PROOFMARK_REVIEW_REMEDIATION.md`. **Resolved:** the fresh deploy this entry called for
+  landed as FIX-22's canonical `0x849b576f…` (see the entry above), so FIX-21 is now live too.
 - **PAYOUT-FIX-20 — EOA payout bug found + fixed + re-proven live (2026-09-08, commit
   `349e071`):** the user reported a demo payout "didn't happen, the buyer never got paid".
   Ground truth: every Proofmark payee is a plain EOA wallet, but the money-out sites paid
@@ -283,6 +318,81 @@ dropdown tags, YouTube link, the planted job id), and submit. Optional: live jud
 StudioNet after the demo take, re-verifying the §05 board numbers if its payout shifts a pool. All
 rebrand + hardening commits are pushed to GitHub; after the env flip, confirm the Vercel rebuild
 deployed the hardened contract (page foot + board numbers on the new address).
+
+## FIX-21 live on StudioNet + the CLI-version trap (2026-09-12)
+
+**Headline: the "StudioNet is broken" story was a CLI-version problem, not a
+network problem.** After the consensus v0.6 migration the CLI and the two Studio
+networks stopped being interchangeable:
+
+- **StudioNet (stable, 61999)** works only with **CLI 0.37.1**. The globally
+  installed **0.40.0-rc.3** can neither deploy nor read there — a deploy finalizes
+  `FINALIZED / NO_MAJORITY` with `round_validators: []` and `num_of_rounds: 0`,
+  and a *read* fails with `ValueError: call to private method
+  __handle_undefined_method__`, which looks exactly like a broken contract.
+  Proven by A/B on one machine, one account, byte-identical `tiny.py` (353 B):
+  0.37.1 deploys and `get()` returns 0; 0.40.0-rc.3 fails the same minute.
+- **studio-dev (RC, 61997)** is the mirror image: 0.37.1 does not know the
+  network at all (`Unknown network: studio-dev`), and deploys there need an
+  explicit `estimate-fees` distribution + matching `--fee-value`.
+
+Because 0.37.1 rejects the config *before* honouring `--rpc`, a StudioNet CLI
+deploy requires briefly flipping `~/.genlayer/genlayer.config.json`'s `network`;
+it is restored to `studio-dev` immediately after (the other assistant on this
+machine shares that file).
+
+**FIX-21 redeployed fresh and read-verified:** `proofmark.py` (89,136 B) →
+`0xcCaD39190F9d96094F251B9766b2292368b0ea56` (tx `0xb9bc3c25…c2200`) and again
+`0x61ec253e12d02eb77CDF0cB4F0526297a246F32c`. `get_accounting('unrated')`
+returns clean zeros on all five tiers including `penalty` — a network that cannot
+run the contract cannot answer a FIX-21-only view.
+
+**Live e2e: 40/42 → the 2 failures were HARNESS bugs, not contract bugs.**
+Measured, not asserted — a standalone repro (`e2e/repro-fix21-refund.mjs`) drove
+both reject-and-refund paths and printed raw atto:
+
+- past-deadline `issue_policy`: pool delta **0 atto**; `get_rejection` returns the
+  recorded reason and confirms "refunded 60000000000000000 atto … retained
+  nothing"; `get_policy` **raises** `[EXPECTED] unknown job_id` (no policy created).
+- premature `file_claim`: balance delta **0 atto**, locked exposure unchanged, bond
+  fully refunded (`2000000000000000000 atto`).
+
+Both harness assertions were wrong:
+
+1. They asserted `(await m.read("get_policy", [job])) === null`, but the contract
+   **raises** for an unknown job id — it never returns `null`. Worse, the operand
+   sat in a `&&` chain, so a false left side silently skipped the read and the bug
+   hid instead of failing loudly. Replaced with an explicit `readRejects()` helper
+   that treats a *contract-level* raise as the pass condition and rethrows
+   transport errors so an RPC flake cannot masquerade as a rejection.
+2. Both checks compared **two independently-decoded reads**. A u256 can arrive as
+   a string on one call and as a JS number on the next — observed live on
+   `get_pool_info`: `locked_exposure_atto` came back as the number `0` and then as
+   the string `"1000000000000000000"`. `BigInt()` of a >2^53 number has already
+   lost precision, so the comparison fails while both values still print as the
+   same `20.1200 GEN`. Both now assert against the exact expected ledger constant
+   (the same pattern the rest of the harness already used and which passed) and
+   log the raw values so a genuine movement stays visible.
+
+Everything downstream of those two steps passed on the same run, which is the
+independent confirmation the money was fine all along: `locked exposure = 1 (only
+job-claim left)`, the auto-breach payout at exactly `19.1200 GEN`, `agent claim
+counters filed=1 upheld=1`, and `pool drained to 0`.
+
+**Open regressions / residuals found while doing this:**
+
+- **Bradbury is now over the pubdata ceiling.** FIX-21 grew the minified build
+  from 36,811 B to **43,074 B** against the repo's own observed ~39,869 B
+  `BlockPubdataLimitReached` cap (~3.2 KB over). The committed
+  `intelligent-contracts/proofmark-bradbury.py` is byte-identical to the
+  minifier's output (`sha256 01427f7b…`, all three gates pass), so the artifact is
+  *in sync* — it is the size that no longer fits. Bradbury therefore still carries
+  the **pre-FIX-21** build (`0xE76AF22a…`). Not yet retried on-chain: a failed
+  attempt still costs gas and this account cannot be refilled.
+- **Judged-claim live path still needs real CIDs.** `verify-payments.js` V3 needs
+  `REAL_SPEC_CID` / `REAL_DELIV_CID` to be publicly resolvable through
+  `w3s.link/ipfs/<cid>`; the uploaded objects are S3-style (Version IDs + ETags),
+  not IPFS CIDs. Covered in direct mode; still not proven live.
 
 ## Status (2026-09-03)
 

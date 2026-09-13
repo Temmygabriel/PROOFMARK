@@ -35,13 +35,19 @@ reputation system by asking for status rather than earning it.
 Job finished
       │
       ▼
-Submit deliverable (job_id, deliverable_hash)  ──►  Only the wallet bound
-                                                       to this agent_id can
-                                                       do this. Recorded
-                                                       on-chain as what
-                                                       this job's claim (if
-                                                       any) will be judged
-                                                       against.
+Submit deliverable (job_id, deliverable_url, deliverable_sha256)
+      │                                    Only the wallet bound to this
+      │                                    agent_id can do this, and the
+      │                                    contract opens the link itself
+      │                                    before accepting: the bytes it
+      │                                    serves must hash to the sha256
+      │                                    committed alongside the link, or
+      │                                    the submission is refused on the
+      │                                    spot. Recorded on-chain as what
+      │                                    this job's claim (if any) will be
+      │                                    judged against.
+      ▼
+Frozen at the deadline, and frozen again the moment a claim is filed
 ```
 
 This step exists because of a real bug an earlier version of this contract
@@ -52,6 +58,12 @@ was promised. Moving submission to the agent (the only party who can
 truthfully attest to what they built) closes that off. If the agent never
 submits anything and the deadline passes, the claim resolves as an
 automatic breach — no evidence to fetch, nothing to judge.
+
+Validating the link *at submission time* matters too. Without it, an agent
+could attach a URL that never resolves, and the failure would only surface
+later — on the buyer's claim, after the bond was already escrowed. The live
+probe moves that failure onto the agent's own transaction, where it costs
+nobody else anything.
 
 ## 2. Buyer — insure a job, and claim if it goes wrong
 
@@ -64,10 +76,12 @@ Get a quote (agent_id, coverage amount)
       │   no waiting on a judgment call. Buyer sees the exact number
       │   before committing to anything.
       ▼
-Issue policy (job_id, agent_id, coverage, spec_hash, deadline)
+Issue policy (job_id, agent_id, coverage, spec_url, spec_sha256, deadline)
       │   Pays the exact quoted premium as the transaction value.
-      │   The spec_hash pins down "what was promised" at issuance time —
-      │   later immutable, so nobody can argue about it after the fact.
+      │   spec_url + spec_sha256 pin down "what was promised" at issuance
+      │   time — a commit-pinned GitHub link plus the fingerprint of the
+      │   exact bytes it served, later immutable, so nobody can argue about
+      │   it after the fact.
       ▼
    ┌──┴──┐
    │     │
@@ -76,10 +90,11 @@ Issue policy (job_id, agent_id, coverage, spec_hash, deadline)
   fine  spec
    │     │
    │     ▼
-   │  (Meanwhile, on the agent's side: the agent submits their deliverable
-   │   as a content-addressed hash — see flow 1b below. A claim can only
-   │   ever be judged against what the agent themselves attested to
-   │   delivering — the buyer cannot supply their own "evidence.")
+   │  (Meanwhile, on the agent's side: the agent accepts the job — posting
+   │   a bond equal to the coverage — and submits their deliverable as a
+   │   GitHub link + sha256 — see flow 1b above. A claim can only ever be
+   │   judged against what the agent themselves attested to delivering —
+   │   the buyer cannot supply their own "evidence.")
    │     │
    │     ▼
    │  File a claim (job_id) + bond
@@ -94,8 +109,10 @@ Issue policy (job_id, agent_id, coverage, spec_hash, deadline)
    │     │   call needed.
    │     ▼
    │  Verdict renders as a stamp, not a status pill
-   │     │   UPHELD  → payout sent, bond refunded, done.
-   │     │   REJECTED → bond forfeited into the pool, done.
+   │     │   UPHELD  → the agent's bond pays the buyer the coverage and
+   │     │             the claim bond is refunded, done.
+   │     │   REJECTED → both the claim bond and the agent's bond are
+   │     │             forfeited into the pool, done.
    │     │   The stamp visual exists because a claim outcome is a real,
    │     │   consequential decision — it should read like one, not like
    │     │   a toast notification that happens to carry money with it.
@@ -150,13 +167,36 @@ one page, one card per action, grouped under the section that names who
 it's for (Agent Registry / Underwriting Pools / Coverage / Claims) — anyone
 can find their one action without narrative in the way.
 
-## The one deliberately "raw" surface: evidence hashes
+## Evidence sourcing: a GitHub link, checked in the browser
 
-`spec_hash` and `deliverable_hash` are plain text inputs, not a file
-upload or a guided pinning flow. This is an honest reflection of where the
-product actually is: evidence sourcing (real IPFS pinning vs. a
-demo-only HTTPS URL) is a decision the person filing has to make
-correctly for the claim to resolve meaningfully, and hiding that behind a
-polished upload button would create false confidence that the product has
-solved a problem it hasn't yet. See the deploy/testing notes for the two
-real options here.
+`spec_url`/`spec_sha256` and `deliverable_url`/`deliverable_sha256` are entered
+as a single link, not a file upload and not an IPFS CID. The flow is three
+steps, stated in the UI where the input is:
+
+1. Put the file in any public GitHub repository.
+2. Open the file on GitHub, click **History**, and open the version to lock in.
+3. Copy the address bar and paste it into the field.
+
+Pressing **Check this link** opens the link *in the user's own browser*, hashes
+the bytes with `crypto.subtle`, and shows the size, the sha256, and a preview of
+what was fingerprinted — before anything is signed. `raw.githubusercontent.com`
+sends `Access-Control-Allow-Origin: *`, so no proxy or server is involved.
+
+Two properties make this a real commitment rather than a convenience:
+
+- **The commit id is what makes the link permanent.** A branch moves; a
+  40-character commit does not. The contract rejects any URL that doesn't pin a
+  full lowercase commit SHA, so "the file changed later" cannot happen.
+- **The fingerprint is checked twice.** Once in the browser (so the user sees
+  what they're about to commit) and again on-chain — `submit_deliverable`
+  re-fetches the URL and refuses the submission unless the served bytes hash to
+  the committed sha256. Validators then re-fetch the same frozen pair when a
+  claim is judged.
+
+The earlier design used IPFS CIDs and a four-gateway redundancy list. It was
+harder to use (an ordinary user has no way to pin a file, and no way to tell a
+dead gateway from a dead CID) and no more secure — the gateway set was a
+convenience fallback, not a trust anchor. A commit-pinned GitHub link is
+strictly easier *and* strictly narrower: one allowlisted host, https only, no
+query or fragment, no whitespace, a shape-checked owner/repo, an enforced
+40-char commit, and a bounded path length.

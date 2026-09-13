@@ -35,17 +35,17 @@ shares, and the deadline logic are all deterministic.
 | Method | Payable | Description |
 |--------|---------|-------------|
 | `register(agent_id)` | no | Bind the caller's wallet to `agent_id` (once). |
-| `issue_policy(job_id, agent_id, coverage_atto, spec_hash, deadline_iso, expected_tier="")` | yes | Pay **at least** the premium (excess refunded) to open a `pending` policy on `job_id` against the agent. Reverts if the agent's quoted tier moved (`expected_tier`). |
-| `accept_job(job_id)` | no | The **insured agent** consents to a `pending` policy → `active`, freezing the spec on-chain (FIX-02). Refuses a policy whose deadline has already passed (FIX-16) — an agent can never be bound to an impossible delivery and hit by an instant auto-breach. |
+| `issue_policy(job_id, agent_id, coverage_atto, spec_url, spec_sha256, deadline_iso, expected_tier="")` | yes | Pay **at least** the premium (excess refunded) to open a `pending` policy on `job_id` against the agent. `spec_url` must be a commit-pinned `raw.githubusercontent.com` link and `spec_sha256` the sha256 of the exact bytes it serves (FIX-22). Reverts if the agent's quoted tier moved (`expected_tier`). |
+| `accept_job(job_id)` | yes | The **insured agent** consents to a `pending` policy → `active`, freezing the spec on-chain (FIX-02), and **posts an agent bond of at least the coverage** (FIX-22) — excess is refunded in-call. Refuses a policy whose deadline has already passed (FIX-16) — an agent can never be bound to an impossible delivery and hit by an instant auto-breach. |
 | `reject_job(job_id)` | no | The agent declines a `pending` policy → `expired`; exposure released, premium refunded to the buyer. |
 | `cancel_pending_policy(job_id)` | no | The buyer withdraws their own `pending` policy → `expired`; exposure released, premium refunded. |
 | `expire_pending_policy(job_id)` | no | **Permissionless** (FIX-18): voids a `pending` policy whose deadline **and** 7-day claim window have passed — exposure released, premium refunded. Without it, a policy nobody accepted and nobody cancelled could lock LP capital forever. |
-| `submit_deliverable(job_id, deliverable_hash)` | no | The **active** insured agent records a deliverable. The CID is canonicalized and probed live (unresolvable → revert); frozen once the deadline passes, and frozen while a claim is pending (evidence stability, FIX-19). |
+| `submit_deliverable(job_id, deliverable_url, deliverable_sha256)` | no | The **active** insured agent records a deliverable as a commit-pinned GitHub link + the sha256 of its bytes. The contract re-fetches the URL and **refuses the submission unless the served bytes hash to `deliverable_sha256`** (FIX-22) — so a dead or doctored link fails here, on the agent's own transaction, not later on the buyer's claim. Frozen once the deadline passes, and frozen while a claim is pending (evidence stability, FIX-19). |
 | `expire_policy(job_id)` | no | Close an expired policy, releasing locked exposure. Buyer may from the deadline; anyone may after the 7-day claim window (FIX-09). |
 | `deposit(tier)` | yes | LP adds capital to a tier pool (zero-share deposits are rejected, FIX-11). |
 | `withdraw(tier, shares)` | no | LP redeems shares (blocked if it would leave the pool below its locked exposure). |
 | `file_claim(job_id)` | yes | **Phase 1 of the two-phase claim (FIX-19/H-02):** buyer escrows `CLAIM_BOND_ATTO` and records the claim as `pending` — *deterministic, no consensus judgement*. Refused once the claim window has closed, while another claim is pending, or if the deliverable is not yet in. |
-| `judge_claim(job_id)` | no | **Phase 2:** permissionless, runs the GenLayer consensus judgement (`_judge_breach`). Because it carries no value, a failed/aborted judgement reverts without burning the escrowed bond. Resolution: `upheld` → payout + bond refund to buyer; `rejected` → bond forfeited to the pool. |
+| `judge_claim(job_id)` | no | **Phase 2:** permissionless, runs the GenLayer consensus judgement (`_judge_breach`). Because it carries no value, a failed/aborted judgement reverts without burning the escrowed bond. Resolution: `upheld` → the agent's forfeited bond pays the buyer the coverage (the tier pool is *not* debited, FIX-22) and the claim bond is refunded; `rejected` → both bonds are forfeited to the pool. |
 | `rescind_pending_claim(job_id)` | no | Buyer-only recovery: cancels a `pending` claim before judgement and refunds the escrowed bond, returning the policy to `active`. |
 
 ### View methods
@@ -70,7 +70,10 @@ shares, and the deadline logic are all deterministic.
 | `MAX_PAYOUT_BPS_OF_POOL` | 1000 | A single claim pays at most 10% of the tier pool. |
 | `MAX_COVERAGE_BPS_OF_POOL` | 1000 | One policy's coverage is capped to 10% of the tier pool at issue (same share a single claim can ever pay). |
 | `MIN_DEADLINE_HORIZON_SECONDS` | 60 | A deadline must be at least this far in the future at issue. |
+| `MAX_DEADLINE_HORIZON_SECONDS` | 90 days | A deadline may be at most this far in the future (FIX-22c) — bounds how long a policy can lock LP exposure. |
 | `MIN_COVERAGE_ATTO` | 0.01 GEN | Minimum coverage per policy (cost floor for tier progress). |
+| `MAX_OPEN_POLICIES_PER_BUYER` | 10 | Open (pending or active) policies one buyer may hold (FIX-22b). Counted at issue — the buyer's own choice — and released by `_close_policy`. |
+| `MAX_OPEN_POLICIES_PER_AGENT` | 10 | Open policies one agent may carry (FIX-22b). Counted only at `accept_job`, so an agent can never be capped out by strangers issuing at them. |
 | `RATE_BPS_BY_TIER` | penalty 1200 / unrated 600 / bronze 400 / silver 250 / gold 150 | Annualized premium basis points. |
 | `MIN_DISTINCT_BUYERS_BY_TIER` | bronze 2 / silver 5 / gold 10 | Distinct buyer addresses needed to reach a tier. |
 | `MIN_TENURE_DAYS_BY_TIER` | bronze 3 / silver 14 / gold 45 | Days since registration needed to reach a tier. |
@@ -78,8 +81,8 @@ shares, and the deadline logic are all deterministic.
 | `PENALTY_BREACH_RATE` | 34% | Breach rate above this drops an agent into the `penalty` tier (FIX-07). |
 | `MAX_UTILIZATION_BPS` | 5000 | Sum of live exposure ≤ 50% of a tier's pool value (aggregate freeze, FIX-03). |
 | `CLAIM_WINDOW_SECONDS` | 7 days | After `deadline + window` anyone may expire a policy; `file_claim` is refused (FIX-09). |
-| `MAX_CID_LEN` / `MAX_EVIDENCE_BYTES` | 64 chars / 128 KiB | CID shape cap and per-evidence size cap (FIX-01/FIX-05). |
-| `EVIDENCE_GATEWAY` | `https://w3s.link/ipfs/` | IPFS gateway validators fetch evidence from. Single immutable dependency (see residuals). |
+| `EVIDENCE_HOST` | `raw.githubusercontent.com` | The **only** host evidence may come from (FIX-22). https only; no query, fragment, or whitespace; shape-checked owner/repo; a full 40-char lowercase commit SHA required; a non-empty file path required. |
+| `MAX_EVIDENCE_URL_LEN` / `MAX_EVIDENCE_BYTES` | 320 chars / 128 KiB | Evidence URL length cap and per-evidence size cap (FIX-01/FIX-22). |
 
 ## Security hardening (why each is there)
 
@@ -109,17 +112,23 @@ adversarial re-audit ("Phase-7b") hardening.
 
 4. **The agent consents to the job and its spec (FIX-02).** `issue_policy`
    creates a `pending` policy; only the insured agent's `accept_job` activates
-   it, freezing `spec_hash` on-chain. A stranger can't be swept into a judged
-   claim against a spec they never saw, and the buyer still can't point a claim
-   at content the agent never accepted.
+   it, freezing `spec_url`/`spec_sha256` on-chain. A stranger can't be swept into
+   a judged claim against a spec they never saw, and the buyer still can't point a
+   claim at content the agent never accepted.
 
-5. **Evidence is content-addressed and probed (FIX-01).** `spec_hash` /
-   `deliverable_hash` must be a canonical IPFS CID (CIDv0/CIDv1, ≤ 64 chars) —
-   not a mutable URL a validator could be shown different bytes for. At
-   `submit_deliverable` the CID is probed live over the gateway: an
-   unresolvable CID (HTTP ≥ 400) reverts, and a deliverable over the 128 KiB
-   cap is refused, so a non-deliverable can't silently masquerade as a delivered
-   job.
+5. **Evidence is a commit-pinned GitHub file, checked twice (FIX-22, was FIX-01).**
+   `spec_url` / `deliverable_url` must be an `https://raw.githubusercontent.com/…`
+   link that names a **full 40-character lowercase commit SHA** — not a branch, so
+   the bytes behind it cannot change after the fact — paired with a `sha256` of
+   the exact bytes it serves. The URL is canonicalized (single allowlisted host,
+   https only, no query/fragment/whitespace, shape-checked owner/repo, non-empty
+   file path, ≤ 320 chars) and the digest shape-checked (64 lowercase hex) at both
+   `issue_policy` and `submit_deliverable`. `submit_deliverable` then **re-fetches
+   the URL and refuses the submission unless the served bytes hash to the
+   committed sha256** — resolving, matching, valid UTF-8, within the 128 KiB /
+   16000-character caps. A dead or doctored link therefore fails on the *agent's*
+   transaction, not later on the buyer's claim. Validators re-fetch the same frozen
+   pair when judging.
 
 6. **Tier promotion can't be bought by one wallet.** Promotion needs a minimum
    real spend per job, a minimum count of **distinct** buyer addresses, and real
@@ -223,20 +232,22 @@ three-pass adversarial review of Shape A. Each maps to a regression test in
 
 - **Prompt injection raises the cost but doesn't close the class (FIX-04).**
   The structural half of the mitigation is agent acceptance (FIX-02): an agent
-  who accepted a specific `spec_hash` on-chain consented to those exact bytes,
-  so a hostile *deliverable* has to pass the honest agent who wrote the spec it
-  answers. A malicious *spec* is a different failure — it prices insurance on
-  something the buyer controls — and is out of scope of the mechanism.
-- **A determined two-wallet controller can still run a slow drip.** The self-buy
-  ban, the 10% per-policy cap and the 50% aggregate cap bound each round, but a
-  buyer with a *separate* wallet for the agent can still issue cover, let the
-  deadline pass, and collect coverage − premium on a default it controls.
-  Insurance that pays out more than its premium is the point of the mechanism —
-  an honest claim is economically identical to this one, so no contract rule can
-  allow the demo and forbid the drain. The real defences are off-chain (identity
-  cost) and, in production, reputation/underwriting: the penalty tier (FIX-07)
-  now prices a chronic breacher at 1200 bps — worse than any newcomer — where
-  Shape A's bronze would have absorbed it.
+  who accepted a specific `spec_url`/`spec_sha256` on-chain consented to those
+  exact bytes, so a hostile *deliverable* has to pass the honest agent who wrote
+  the spec it answers. A malicious *spec* is a different failure — it prices
+  insurance on something the buyer controls — and is out of scope of the mechanism.
+- **A two-wallet controller can no longer profit, but can still tie up capital.**
+  The FIX-22 agent bond is the change that matters: the agent must post a bond at
+  least equal to the coverage, and on an upheld breach that bond — not the tier
+  pool — pays the buyer. A buyer/agent pair under one controller therefore ends a
+  completed round at **`seed + premium`**, having destroyed `premium` in fees, with
+  the pool exactly whole (`tier_balance = pool_value + bond − payout = pool_value`).
+  The earlier draft of this document listed this as an accepted residual; it is now
+  a closed one, covered by `test_self_dealing_round_is_value_destroying`. What
+  remains is *availability*, not theft: the pair can still lock up to 10 open
+  policies each (`MAX_OPEN_POLICIES_PER_*`, FIX-22b) worth of exposure, and the
+  premium on each, before any cap bites. The self-buy ban (item 9) closes the
+  one-wallet case outright.
 - **Third-party policy pressure is bounded, not impossible.** Issuance is
   permissionless, so anyone can open (and pay for) a `pending` policy naming an
   agent before the agent rejects it. Acceptance is the agent's veto and a reject
@@ -244,21 +255,23 @@ three-pass adversarial review of Shape A. Each maps to a regression test in
   counts toward the agent's `jobs_insured` (counted at issue by design, FIX-02).
   A griefer can therefore spend premiums to briefly lock exposure and inflate
   that one counter. Each attempt costs the attacker a premium, is capped at 10%
-  of the pool, can never reach judgement without the agent's acceptance, and
-  cannot promote the agent (tiers need distinct buyers, tenure, and a breach
-  gate).
-- **Judged claims run on a single immutable gateway (FIX-16).**
-  `EVIDENCE_GATEWAY` (`w3s.link`) is the one HTTP dependency for every judged
-  claim. If it changes its URL scheme, rate-limits the validator set's IP range,
-  or goes offline, every policy with a submitted deliverable becomes unclaimable
-  and its locked exposure cannot be released by any contract path — there is no
-  admin to rotate it (FIX-12 chose Option A). This is the primary operational
-  risk in v1.
+  of the pool, is bounded by `MAX_OPEN_POLICIES_PER_BUYER`, can never reach
+  judgement without the agent's acceptance, and cannot promote the agent (tiers
+  need distinct buyers, tenure, and a breach gate).
+- **Evidence rests on one host, but it is a hardening not a widening (FIX-22).**
+  `EVIDENCE_HOST` (`raw.githubusercontent.com`) is the one HTTP dependency for
+  every spec and deliverable. The trade against the earlier four-gateway IPFS
+  design is deliberate: the gateway list was a convenience fallback, not a trust
+  anchor (any of the four could serve anything, and the CID digest — not the host
+  — was the real check), while a single host makes the allowlist enforceable and
+  the user-facing flow something an ordinary person can actually complete. GitHub
+  going offline or changing its raw URL scheme would still strand submitted
+  evidence; there is no admin to rotate the host (FIX-12 chose Option A).
 - **Judged claims have only been proven in direct mode.** The deterministic
   auto-breach path is proven live on StudioNet; the judged path (deliverable
-  submitted → validators re-fetch both CIDs and score conformance) runs only in
-  direct-mode tests with web + LLM stubbed. It is the documented QA gap, targeted
-  by a live judged claim in the Shape B evidence pass.
+  submitted → validators re-fetch both URL+sha256 pairs and score conformance)
+  runs only in direct-mode tests with web + LLM stubbed. It is the documented QA
+  gap, targeted by a live judged claim in the FIX-22 evidence pass.
 
 ## Testing
 

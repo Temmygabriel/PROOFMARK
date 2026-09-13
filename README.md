@@ -37,21 +37,24 @@ frontend that talks to it.
 Premium pricing and pool accounting are deterministic — no AI call, no
 judgment involved. The one thing GenLayer actually judges is whether a
 delivered job matches its agreed spec when a buyer requests a verdict;
-validators independently re-fetch the evidence (content-addressed CIDs, so
-every validator judges identical bytes) and re-derive a conformance score
-rather than trusting a single leader's answer. An upheld claim stamps the job
-**NOT DELIVERED** and the buyer is covered from the pool; a rejected claim
-stamps it **DELIVERED** and the claim bond is forfeited to the pool. See the
+validators independently re-fetch the evidence (a commit-pinned GitHub file
+plus the sha256 of its exact bytes, checked on-chain at submission, so every
+validator judges identical bytes) and re-derive a conformance score rather
+than trusting a single leader's answer. An upheld claim stamps the job
+**NOT DELIVERED** and the buyer is covered — **from the agent's own forfeited
+bond, never from LP capital**; a rejected claim stamps it **DELIVERED** and
+both the claim bond and the agent's bond are forfeited to the pool. See the
 contract's own docstring and inline comments for the full reasoning behind
-each design choice (single-use claim gates, content-hashed evidence, exact
+each design choice (single-use claim gates, commit-pinned evidence, exact
 premiums, why forfeited bonds return to the pool).
 
 ## Validation
 
 - Direct-mode suite (fast, in-memory): `python -m pytest tests/direct/ -v`
-  → 47 passing on `class Proofmark`.
+  → **74 passing** on `class Proofmark`.
 - Real-network e2e harness in `e2e/` (Node + genlayer-js, because the CLI
   cannot attach `value` to payable writes): full scenario + verify-payments.
   Live results and addresses are recorded in `docs/PROOFMARK_DEPLOYMENT.md`
   and `docs/dev/PROOFMARK_E2E_REPORT.md`.
-- `genvm-lint check intelligent-contracts/proofmark.py` is clean.
+- `genvm-lint check intelligent-contracts/proofmark.py` is clean
+  (22 methods: 9 view, 13 write).
