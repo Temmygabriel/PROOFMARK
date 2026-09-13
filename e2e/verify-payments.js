@@ -148,23 +148,44 @@ async function runVerification(netName, contractAddress) {
     `pool before: ${fmtGen(pool_before?.balance_atto)} pool after: ${fmtGen(pool_after_deposit?.balance_atto)}`
   );
 
-  const shares = await m.read("get_lp_position", ["unrated", LP]);
-  console.log(`  LP shares to withdraw: ${shares}`);
+  // The board is shared and may carry a live policy, so the LP cannot always
+  // exit the whole position: withdraw() refuses any payout that would leave the
+  // tier holding less than its locked exposure -- that capital is backing active
+  // coverage, and the refusal is a feature, not a fault. Withdraw HALF the
+  // position instead: a genuine round-trip that stays valid on an active board.
+  const posBefore = await m.read("get_lp_position", ["unrated", LP]);
+  const poolBefore = await m.read("get_pool_info", ["unrated"]);
+  const ownedShares = BigInt(String(posBefore));
+  const totalShares = BigInt(String(poolBefore?.total_shares ?? 0));
+  const poolValue = BigInt(String(poolBefore?.balance_atto ?? 0));
+  const locked = BigInt(String(poolBefore?.locked_exposure_atto ?? 0));
+  const request = ownedShares / 2n;
+  const expectedPayout = totalShares > 0n ? (request * poolValue) / totalShares : 0n;
+  console.log(
+    `  LP position: ${ownedShares} of ${totalShares} shares; withdrawing ${request} ` +
+      `-> expected payout ${fmtGen(expectedPayout)} (tier keeps ` +
+      `${fmtGen(poolValue - expectedPayout)}, locked ${fmtGen(locked)})`
+  );
+  check(
+    "Withdrawal leaves the tier's locked exposure fully backed",
+    request > 0n && poolValue - expectedPayout >= locked,
+    `remaining ${fmtGen(poolValue - expectedPayout)} vs locked ${fmtGen(locked)}`
+  );
 
   const lp_before_withdraw = await getBalance(readClient, LP);
-  const pool_before_withdraw = await m.read("get_pool_info", ["unrated"]);
-
-  const wd = await m.submitAndWait(accs.lp.account, "withdraw", ["unrated", shares], 0n);
+  const wd = await m.submitAndWait(accs.lp.account, "withdraw", ["unrated", request], 0n);
   check("LP withdraw tx finalized as success", wd.ok, `hash: ${wd.hash} status: ${wd.execName}`);
 
   await sleep(3000); // let the finalized transfer credit
   const lp_after_withdraw = await getBalance(readClient, LP);
   const pool_after_withdraw = await m.read("get_pool_info", ["unrated"]);
+  const posAfter = await m.read("get_lp_position", ["unrated", LP]);
   const lp_delta_withdraw =
     lp_before_withdraw !== null && lp_after_withdraw !== null
       ? lp_after_withdraw - lp_before_withdraw
       : null;
-  const pool_withdrew = BigInt(pool_before_withdraw?.balance_atto ?? 0) - BigInt(pool_after_withdraw?.balance_atto ?? 0);
+  const pool_withdrew = poolValue - BigInt(String(pool_after_withdraw?.balance_atto ?? 0));
+  const sharesBurned = ownedShares - BigInt(String(posAfter));
 
   walletCheck(
     "LP wallet ACTUALLY credited after withdraw",
@@ -173,9 +194,14 @@ async function runVerification(netName, contractAddress) {
     netName
   );
   check(
-    "Pool balance decreased by the withdrawal",
-    pool_withdrew > 0n,
-    `pool before: ${fmtGen(pool_before_withdraw?.balance_atto)} after: ${fmtGen(pool_after_withdraw?.balance_atto)} released: ${fmtGen(pool_withdrew)}`
+    "Pool released EXACTLY the proportional payout for the shares burned",
+    pool_withdrew === expectedPayout,
+    `released: ${fmtGen(pool_withdrew)} expected: ${fmtGen(expectedPayout)}`
+  );
+  check(
+    "LP share position debited by exactly the shares withdrawn",
+    sharesBurned === request,
+    `burned: ${sharesBurned} expected: ${request}`
   );
   if (netName === "bradbury") {
     check(
@@ -262,10 +288,16 @@ async function runVerification(netName, contractAddress) {
     pool_delta_claim === 0n,
     `pool before: ${fmtGen(pool_before_claim?.balance_atto)} after: ${fmtGen(pool_after_claim?.balance_atto)} delta: ${fmtGen(pool_delta_claim)}`
   );
+  // The board is shared, so escrow may still carry another run's bond: assert
+  // THIS policy's bond left escrow rather than that escrow is globally zero.
+  const escrowBeforeClaim = BigInt(String(escrow_before_claim?.agent_bond_escrow_atto ?? -1));
+  const escrowAfterClaim = BigInt(String(escrow_after_claim?.agent_bond_escrow_atto ?? -1));
   check(
-    "Agent bond left escrow (forfeited to the pool, then paid out)",
-    BigInt(escrow_after_claim?.agent_bond_escrow_atto ?? -1) === 0n,
-    `escrow before: ${fmtGen(escrow_before_claim?.agent_bond_escrow_atto)} after: ${fmtGen(escrow_after_claim?.agent_bond_escrow_atto)}`
+    "This policy's agent bond left escrow (forfeited to the pool, then paid out)",
+    escrowBeforeClaim >= 0n && escrowBeforeClaim - escrowAfterClaim === COVERAGE,
+    `escrow before: ${fmtGen(escrow_before_claim?.agent_bond_escrow_atto)} after: ` +
+      `${fmtGen(escrow_after_claim?.agent_bond_escrow_atto)} (delta ${escrowBeforeClaim - escrowAfterClaim}, ` +
+      `expected -${COVERAGE})`
   );
   if (netName === "bradbury") {
     check(

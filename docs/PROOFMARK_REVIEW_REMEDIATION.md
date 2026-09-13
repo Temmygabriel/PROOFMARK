@@ -165,9 +165,13 @@ quote → issuance → agent acceptance → deliverable submission → claim fil
 **Live.** The live production equivalent is the §05 demo loop recorded in
 [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md). The version on the
 current canonical address is the **deterministic auto-breach** path (no
-deliverable → breach), which settles and pays over the external rail. A live
-**judged** claim (deliverable present → GenLayer consensus verdict) is the
-remaining live item — see *Live status* at the end of this document.
+deliverable → breach), which settles and pays over the external rail. The live
+**judged** leg (deliverable present → GenLayer consensus verdict → settlement)
+landed on 2026-09-13 — `verify-payments.js` V3: `file_claim` left a `pending`
+claim, the permissionless `judge_claim` (sent by a third-party LP account)
+produced a real **`rejected`** verdict against a public commit-pinned GitHub
+pair, the pool took exactly the forfeited claim bond and the agent's bond
+returned. See *Live judged claim (V3)* in PROOFMARK_LIVE_EVIDENCE.md.
 
 ---
 
@@ -369,7 +373,7 @@ settlement on a live network. What is proven live and what is not:
 | Reject-and-refund payable shape (FIX-21) on a live network | **proven live** on canonical `0x849b576f…` — the e2e's past-deadline issue and premature claim both reverted-to-refund with "the contract retained nothing", pool balance unchanged across each |
 | Agent bond funds the payout; LP pool untouched (FIX-22a) | **proven live** on `0x849b576f…` — auto-breach claim left the pool at **20.1200 GEN** (both premiums kept, zero LP capital paid out) with all bonds returned |
 | Commit-pinned GitHub evidence accepted; foreign host refused (FIX-22b) | **proven live** on `0x849b576f…` — foreign-host `submit_deliverable` reverted; a shape-valid commit-pinned URL was accepted |
-| Live **judged** claim (deliverable present → LLM consensus verdict → payout) | **pending** — needs a real commit-pinned GitHub spec+deliverable pair (see `verify-payments.js` V3) |
+| Live **judged** claim (deliverable present → LLM consensus verdict → payout) | **proven live 2026-09-13** on `0x849b576f…` — a real commit-pinned GitHub spec+deliverable pair judged to a **`rejected`** verdict by live validators; pool took exactly the forfeited 2 GEN claim bond, agent bond returned; both txs audited to agreeing-validator SUCCESS (`e2e/results/verify-payments-fix22-judged2.log`, 19/19) |
 
 Canonical StudioNet is `0x849b576f64ecA308300D278223951E4A88e1B5D4`, deployed
 2026-09-12 from this source (tx

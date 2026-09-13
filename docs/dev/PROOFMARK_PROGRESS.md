@@ -17,6 +17,25 @@ re-run the live proof (Phase 6); (2) scope = **everything** (in-repo +
 project-root deliverables + SECURITY-CHECK review docs).
 
 Phase state (newest first):
+- **Live judged claim (V3) proven — last FIX-21 punch-list residual closed
+  (2026-09-13):** `node e2e/verify-payments.js` on the FIX-22 canonical
+  `0x849b576f…` → **19/19 checks**. V3 is the reviewer's item-5 live leg: it
+  files a real claim against a commit-pinned GitHub spec/deliverable pair in this
+  repo (`e2e/evidence/spec.md` + `deliverable.md` @ commit `2208a0b`, sha256 of
+  the served bytes), observes **`pending`** (proving the two-phase split —
+  `file_claim` only escrows), then calls the **permissionless, non-payable**
+  `judge_claim` from the LP account (deliberately a third party). Live validators
+  returned a real **`rejected`** verdict: the pool took exactly the forfeited
+  2 GEN buyer claim bond and the agent's bond returned. Both txs independently
+  audited (`audit-receipts.mjs`) to agreeing-validator **SUCCESS** (`file_claim`
+  2 agree / 2 idle, `judge_claim` 3 agree / 1 idle). Harness fixes made in this
+  pass: V3 now actually calls `judge_claim` (it previously only filed + polled,
+  and its check passed on `pending` — it proved nothing about judgement); V1
+  withdraws **half** the LP position, because the contract correctly refuses a
+  full exit that would leave the tier's locked exposure unbacked; V2's escrow
+  assertion became a delta (the board carries a live bond from the seed). Docs
+  swept to the closed residual. **Bradbury is now the only open item** (the
+  FIX-22 build is ~20% over the pubdata cap).
 - **FIX-22 — self-dealing drain closed + GitHub evidence model, live on a new canonical
   (2026-09-12):** the user asked why the deliverable flow required IPFS at all
   (*"if it's a nightmare for me the developer to use, imagine what it would be for users,

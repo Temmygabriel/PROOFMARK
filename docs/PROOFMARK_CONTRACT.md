@@ -267,11 +267,15 @@ three-pass adversarial review of Shape A. Each maps to a regression test in
   the user-facing flow something an ordinary person can actually complete. GitHub
   going offline or changing its raw URL scheme would still strand submitted
   evidence; there is no admin to rotate the host (FIX-12 chose Option A).
-- **Judged claims have only been proven in direct mode.** The deterministic
-  auto-breach path is proven live on StudioNet; the judged path (deliverable
-  submitted → validators re-fetch both URL+sha256 pairs and score conformance)
-  runs only in direct-mode tests with web + LLM stubbed. It is the documented QA
-  gap, targeted by a live judged claim in the FIX-22 evidence pass.
+- **(Closed 2026-09-13) Judged claims are now proven live, not only in direct
+  mode.** The deterministic auto-breach path was already live on StudioNet; the
+  judged path (deliverable submitted → validators re-fetch both URL+sha256 pairs
+  and score conformance) now has a live run too: a real commit-pinned GitHub
+  spec/deliverable pair was judged to a **`rejected`** verdict by live
+  validators, with the settlement arithmetic asserted exactly (the pool took the
+  forfeited 2 GEN claim bond, the agent's bond returned). See
+  [PROOFMARK_LIVE_EVIDENCE.md](PROOFMARK_LIVE_EVIDENCE.md) → *Live judged claim
+  (V3)*. The QA gap this paragraph used to record is closed.
 
 ## Testing
 

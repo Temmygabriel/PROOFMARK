@@ -101,6 +101,55 @@ same audit run against the two *negative* txs in the full e2e (foreign-host
 signature — **3/3 agreeing validators report ERROR** — so the harness demonstrably
 tells a real revert apart from an idle no-show rather than treating both as failure.
 
+### Live judged claim (V3) — the AI path (`0x849b576f…`)
+
+The 44-step e2e and the §05 demo both settle through the **deterministic
+auto-breach** path, which needs no AI call. FIX-21's punch list left one live
+item open: a real **judged** claim — a deliverable is present, validators
+re-fetch both commit-pinned GitHub URLs, score conformance, and vote. That ran on
+2026-09-13 (`e2e/results/verify-payments-fix22-judged2.log`, **19/19 checks**).
+
+The evidence pair is genuine, public, commit-pinned, and lives in this repo:
+
+| | URL (`…/proofmark/2208a0be4503ba6beeb41181876e848ca1a6782f/…`) | sha256 |
+|---|---|---|
+| spec | `e2e/evidence/spec.md` | `1709a051…4726d9b2b` |
+| deliverable | `e2e/evidence/deliverable.md` | `f3ba9374…44f6501860` |
+
+The **two-phase claim** (FIX-19) is what makes this observable at all:
+
+| step | tx | outcome |
+|---|---|---|
+| `file_claim` — payable, 2 GEN claim bond | `0x14139eec…96edb43d2` | escrowed; `get_claim_status` = **`pending`**, no verdict yet |
+| `judge_claim` — non-payable, sent by the **LP** account (a third party) | `0x677a4716…ce3f8a00b` | verdict **`rejected`** |
+
+`rejected` is the correct verdict: `deliverable.md` satisfies `spec.md`, so the
+breach claim does not hold up. The money then follows the verdict exactly:
+
+```
+[PASS] Two-phase claim: file_claim left a PENDING claim, no verdict yet
+[PASS] Judged consensus reached a REAL verdict (upheld or rejected)  -> rejected
+[PASS] Rejected verdict: pool received EXACTLY the forfeited claim bond
+       pool before: 34.240000 GEN after: 36.240000 GEN delta: 2.000000 GEN
+[PASS] Rejected verdict: agent's bond returned (a failed claim is not a breach)
+       escrow before: 2.000000 GEN after: 1.000000 GEN
+```
+
+A rejected claim is **not** a breach: the **buyer's** 2 GEN claim bond is
+forfeited into the pool — the anti-spam cost of a claim that does not hold up —
+while the **agent's** bond is returned to the agent untouched. `judge_claim` is
+deliberately **non-payable**, so a transient evidence-host failure reverts with
+no attached value at risk and the call can simply be retried.
+
+**Independently audited** (`node e2e/audit-receipts.mjs`): both txs are
+`FINALIZED` with the *agreeing* validators reporting **SUCCESS** — `file_claim`
+2 agree SUCCESS / 2 idle ERROR; `judge_claim` 3 agree SUCCESS / 1 idle ERROR.
+The judged path is therefore genuinely executed, not merely accepted.
+
+This closes the last live residual on the FIX-21 punch list: the judged path is
+proven end to end on a live network, judged by real validators against real
+public files, with the settlement arithmetic asserted as exact deltas.
+
 ### Superseded — fixed Proofmark, PAYOUT-FIX-20 (2026-09-08)
 
 | Address | Role | On-chain proof |
@@ -241,16 +290,16 @@ the unpatched source.
    the very bug PAYOUT-FIX-20 fixes; the current canonical's payout children are clean
    EthSend credits. Prior docs' "buyer paid 1 GEN" phrasing on `0x850F…` referred to
    the ledger move only and is corrected here.
-4. **Live judged (V3) claim** — the IPFS-gateway skip that blocked this is
-   **resolved by FIX-22**: evidence is now a commit-pinned GitHub URL, and
-   `raw.githubusercontent.com` is reachable from the validator set. What remains
-   is sourcing a *real* public spec + deliverable pair to judge against (the V3
-   path in `e2e/verify-payments.js` takes them as `REAL_SPEC_URL` /
-   `REAL_SPEC_SHA256` / `REAL_DELIV_URL` / `REAL_DELIV_SHA256`). Until that run
-   lands, the judged bond path is proven in direct-mode tests (74/74) and the
-   live deterministic auto-breach payout is proven live on the canonical
-   (above). The auto-breach path needs no AI call, so it proves the bond-funded
-   payout end to end without exercising validator judgment.
+4. **(CLOSED 2026-09-13) Live judged (V3) claim** — the IPFS-gateway skip was
+   resolved by FIX-22 (evidence is a commit-pinned GitHub URL + sha256), and the
+   remaining half — judging a *real* public spec/deliverable pair with live
+   validators — is now done. `node e2e/verify-payments.js` → **19/19**, whose V3
+   phase filed a claim (`pending`), called the permissionless `judge_claim` from
+   a third-party account, and reached a real **`rejected`** verdict, with the
+   pool credited exactly the forfeited 2 GEN claim bond and the agent's bond
+   returned. Both txs independently audited to agreeing-validator **SUCCESS**.
+   See *Live judged claim (V3)* above. The judged path is no longer a QA gap: it
+   is proven in direct mode (74/74) *and* live.
 
 ## Re-verify in one command
 
