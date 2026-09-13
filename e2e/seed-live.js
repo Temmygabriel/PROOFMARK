@@ -20,7 +20,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Fixed amounts (atto GEN) — mirrors run.js.
 const GEN = 10n ** 18n;
 const COVERAGE = GEN; // 1 GEN
-const SPEC_CID = "Qm" + "a".repeat(44); // content never fetched (auto-breach path)
+// FIX-22 evidence: a commit-pinned GitHub raw URL + the sha256 of the exact
+// bytes. The auto-breach path never fetches the spec, so only the URL SHAPE is
+// validated on-chain here; it still must be a well-formed 40-hex-commit link.
+const SPEC_URL = `https://raw.githubusercontent.com/proofmark-e2e/evidence/${"a".repeat(40)}/spec.txt`;
+const SPEC_SHA256 = "0".repeat(64);
 const DEPOSITS = {
   unrated: 10n * GEN,
   bronze: 5n * GEN,
@@ -86,23 +90,27 @@ async function main() {
   await write(
     accs.buyer,
     "issue_policy",
-    [jobId, agentId, COVERAGE, SPEC_CID, deadline],
+    [jobId, agentId, COVERAGE, SPEC_URL, SPEC_SHA256, deadline],
     quote?.premium_atto ?? 0n,
     `issue ${jobId} (payable ${genFmt(quote?.premium_atto)} premium)`
   );
 
-  // 4b) Shape B consent: the live agent accepts the job -> PENDING -> ACTIVE.
-  await write(liveWallet, "accept_job", [jobId], 0n, `live agent accepts ${jobId}`);
+  // 4b) Shape B consent + FIX-22 agent bond: the live agent accepts the job and
+  //     posts COVERAGE as its bond -> PENDING -> ACTIVE. The bond is what pays a
+  //     breach claim, so the tier pool can never be drained by a self-dealing pair.
+  await write(liveWallet, "accept_job", [jobId], COVERAGE, `live agent accepts ${jobId} + posts ${genFmt(COVERAGE)} bond`);
 
   // 5) Final board state: Unrated now carries the locked-exposure sliver
   //    (deposit 10 + premium 0.06; the premium stays in the pool at issue).
   const pol = await m.read("get_policy", [jobId]);
   const unrated = await m.read("get_pool_info", ["unrated"]);
+  const acc = await m.read("get_accounting", ["unrated"]);
   console.log("\n--- final board state ---");
   console.log(`policy ${jobId}: status=${pol?.status} agent_id=${pol?.agent_id} deadline=${pol?.deadline}`);
   console.log(
     `unrated balance=${genFmt(unrated?.balance_atto)} locked=${genFmt(unrated?.locked_exposure_atto)}`
   );
+  console.log(`agent bond escrowed (backs the payout, not LP capital)=${genFmt(acc?.agent_bond_escrow_atto)}`);
   console.log("\nLive board should now read:");
   console.log(`  Unrated  10.0600 GEN   (locked sliver 1.0000 GEN)`);
   console.log(`  Bronze    5.0000 GEN`);

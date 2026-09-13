@@ -10,6 +10,11 @@
 //   node run.js probe --network <n> [--address <hex>]   minimal register + raw shape
 //   node run.js e2e   --network <n> [--address <hex>]   full deterministic scenario
 //
+// Independent verification: `node audit-receipts.mjs <txhash>…` prints each
+// validator's mode/vote/execution_result for any tx. Use it to confirm a tx
+// really executed rather than merely finalizing -- a reverted call also
+// finalizes as ACCEPTED.
+//
 // StudioNet does not enforce balances (free value). Bradbury needs the role
 // addresses funded with GEN from the 'default' account first (see funding
 // amounts printed by `keys`).
@@ -32,7 +37,7 @@ const CONTRACT_PATH = path.join(__dirname, "..", "intelligent-contracts", "proof
 const NETS = {
   studionet: {
     label: "StudioNet",
-    address: "0x65319a2787BE8a57ee570fD0eB61A69887D91099", // Proofmark canonical, PAYOUT-FIX-20 external EthSend rail (2026-09-08). §05 demo loop register->payout settled on it; file_claim children are clean EthSend credits to the buyer EOA (1 + 2 GEN, FINALIZED, no Execution ERROR) -- e2e/results/demo-payout.log. Supersedes 0x850F (pre-fix rail: its "settled payout" debited the pool but never EOA-credited the buyer).
+    address: "0x849b576f64ecA308300D278223951E4A88e1B5D4", // Proofmark FIX-22 canonical (GitHub URL+sha256 evidence; agent bond kills the self-dealing drain; per-buyer/per-agent open-policy caps; 90-day deadline ceiling), DEPLOYED 2026-09-12 via CLI 0.37.1, deploy tx 0x1ea533ada62af64d5e85a4a06033bf481fa9a0b25ef25e9a04ac4529f37e6c69, validators AGREE. Supersedes 0x65319a27 (PAYOUT-FIX-20 rail, CID evidence, unbonded accept_job -- its pool could be drained by a buyer/agent pair).
     chain: studionet,
     needsFunding: false,
   },
@@ -284,8 +289,19 @@ function futureIso(secondsFromNow) {
     .replace(/\.\d{3}Z$/, ".000Z");
 }
 
-const CID_OK = "Qm" + "b".repeat(44); // deliverable-shaped CID (see test file)
-const CID_SPEC = "Qm" + "a".repeat(44);
+// FIX-22: evidence is a commit-pinned GitHub raw URL plus the sha256 of the
+// exact bytes, both committed on-chain. The auto-breach path never fetches the
+// spec, so SPEC_SHA only has to be well-formed (the shape is validated on-chain
+// at issue, and 64 hex chars is the whole requirement). The negative submit
+// below uses a foreign host, which is refused before any fetch runs.
+const EVIDENCE_COMMIT = "a".repeat(40);
+const EVIDENCE_BASE = `https://raw.githubusercontent.com/proofmark-e2e/evidence/${EVIDENCE_COMMIT}/`;
+const SPEC_URL = `${EVIDENCE_BASE}spec.txt`;
+const SPEC_SHA = "0".repeat(64);
+const DELIV_URL = `${EVIDENCE_BASE}deliverable.txt`;
+const DELIV_SHA = "0".repeat(64);
+const BAD_URL = "https://not-the-evidence-host.example/deliverable.txt";
+const BAD_SHA = "0".repeat(64);
 
 async function runProbe(netName, keys) {
   const m = makeNetwork(netName);
@@ -319,6 +335,57 @@ async function runE2E(netName, keys) {
       return r;
     });
 
+  /**
+   * A REJECTED payable call is a SUCCESS on-chain (FIX-21). GenLayer does not
+   * refund the attached value of a reverted payable call -- it is retained with
+   * no ledger entry (live: 0x429b0177...ab752f, a funded issue_policy that
+   * finalized GENVM RESULT: ERROR and left 0.06 GEN behind) -- so the contract
+   * never reverts on a caller-fixable condition. It accepts the call, refunds
+   * the full attached value in the SAME transaction, returns normally, and
+   * records the reason, which get_rejection() reads back. That read-back is
+   * exactly what the frontend does to show the user why a call was refused.
+   */
+  const writeRejected = async (acc, fn, args, value, jobId, label, expectFragment) => {
+    const r = await m.submitAndWait(acc.account, fn, args, value);
+    step(
+      `${label} -- accepted, not reverted`,
+      r.ok && !r.reverted,
+      `${r.reverted ? `reverted (${r.execName || r.status})` : `ok (${r.status})`} ${r.hash}`
+    );
+    const reason = await m.read("get_rejection", [acc.account.address, jobId]);
+    const has = typeof reason === "string" && reason.length > 0;
+    step(
+      `${label} -- reason recorded on-chain`,
+      has && (!expectFragment || reason.includes(expectFragment)),
+      has ? reason : "(empty)"
+    );
+    return r;
+  };
+
+  /**
+   * A read that must RAISE -- for the "no such record" assertions.
+   *
+   * The contract's get_policy raises `[EXPECTED] unknown job_id` for an unknown
+   * key; it does NOT return null. Asserting `=== null` is therefore wrong, and
+   * because those assertions sit in a `&&` chain a false left operand silently
+   * skips the read entirely, so the bug hides instead of failing loudly.
+   *
+   * A transport failure is not evidence of a rejected read, so transient RPC
+   * errors are rethrown rather than counted as a raise.
+   */
+  const readRejects = async (fn, args) => {
+    try {
+      await m.read(fn, args);
+      return false;
+    } catch (e) {
+      const msg = String(e?.message || e);
+      if (/fetch failed|ECONNRESET|invalid session|socket|network|timeout|429|rate|not valid JSON|Unexpected token|<!DOCTYPE/i.test(msg)) {
+        throw e;
+      }
+      return true;
+    }
+  };
+
   // ---- Registration + network-time calibration ----
   await write(accs.agent, "register", [agentId], 0n, false, "register(agent)");
   let profile = await m.read("get_profile", [agentId]);
@@ -350,7 +417,13 @@ async function runE2E(netName, keys) {
   // ---- Policies (short deadlines so the whole run settles in one wait) ----
   // Deadline must comfortably outlive the pre-wait write block (slow StudioNet),
   // yet be short enough that one sleep finishes the run. 240s balances both.
-  const DEADLINE_S = 240;
+  // Deadline for every issued policy. It must comfortably outlast the phase
+  // before the wait below -- that phase is ~15 StudioNet writes (each 10-40s,
+  // and FIX-21 added two reject-and-refund round-trips with a read-back), so a
+  // 240s deadline let the "premature claim" step slip past it and settle as a
+  // real auto-breach. 600s leaves ~5 min of margin; the wait below then makes
+  // the policies expire so the auto-breach path can be driven for real.
+  const DEADLINE_S = 600;
   const dl = (s) => {
     const ms = Date.now() + s * 1000;
     lastDeadlineMs = Math.max(lastDeadlineMs, ms);
@@ -359,22 +432,20 @@ async function runE2E(netName, keys) {
   let lastDeadlineMs = 0;
   const deadlineShort = dl(DEADLINE_S);
   const pReject = P("job-reject"); // agent declines while pending -> premium refunded
-  const pVeto = P("job-veto"); // accepted; URL CID rejected, then frozen after deadline
+  const pVeto = P("job-veto"); // accepted; foreign-host URL rejected, then frozen
   const pClaim = P("job-claim"); // accepted, never delivered -> auto-breach claim
   const pPast = P("job-past");
-  // Deterministic submit-side negatives that need NO live gateway (FIX-01):
-  // a URL-shaped string fails CID canonicalisation, and any submit after the
-  // deadline hits the freeze check before a probe ever runs. (The live probe
-  // rejection of an unresolvable CID is covered by the direct-mode test
-  // test_unresolvable_cid_submit_reverts -- w3s.link answers unknown CIDs with
-  // redirects/429s, so it is not a deterministic on-chain signal.)
-  const BAD_URL = "https://not-a-cid.example/deliverable.txt";
+  // Deterministic submit-side negatives that need NO live fetch (FIX-22): a URL
+  // on any host other than the allowlisted evidence host fails canonicalisation,
+  // and any submit after the deadline hits the freeze check before a probe ever
+  // runs. (The live probe rejection of an unresolvable URL is covered by the
+  // direct-mode test test_unresolvable_url_submit_reverts.)
 
   // ---- Issue + agent declines: PENDING -> EXPIRED, premium refunded (FIX-02) ----
   await write(
     accs.buyer,
     "issue_policy",
-    [pReject, agentId, COVERAGE, CID_SPEC, deadlineShort],
+    [pReject, agentId, COVERAGE, SPEC_URL, SPEC_SHA, deadlineShort],
     PREMIUM_UNRATED,
     false,
     "issue job-reject (payable)"
@@ -391,48 +462,54 @@ async function runE2E(netName, keys) {
     `balance=${genFmt(pool?.balance_atto)} locked=${genFmt(pool?.locked_exposure_atto)}`
   );
 
-  // ---- Issue + accept, then submit-side negatives (FIX-01, gateway-free) ----
+  // ---- Issue + accept, then submit-side negatives (FIX-22, fetch-free) ----
   await write(
     accs.buyer,
     "issue_policy",
-    [pVeto, agentId, COVERAGE, CID_SPEC, deadlineShort],
+    [pVeto, agentId, COVERAGE, SPEC_URL, SPEC_SHA, deadlineShort],
     PREMIUM_UNRATED,
     false,
     "issue job-veto (payable)"
   );
-  await write(accs.agent, "accept_job", [pVeto], 0n, false, "agent accepts job-veto");
+  await write(accs.agent, "accept_job", [pVeto], COVERAGE, false, "agent accepts job-veto (posts coverage bond)");
   pol = await m.read("get_policy", [pVeto]);
   step("accepted policy = active", pol?.status === "active", `status=${pol?.status}`);
+  step(
+    "agent bond escrowed == coverage",
+    EQ(pol?.agent_bond_atto, COVERAGE),
+    `bond=${genFmt(pol?.agent_bond_atto)}`
+  );
   await write(
     accs.agent,
     "submit_deliverable",
-    [pVeto, BAD_URL],
+    [pVeto, BAD_URL, BAD_SHA],
     0n,
     true,
-    "URL-shaped 'deliverable' REVERTS (canonical CID only)"
+    "foreign-host 'deliverable' REVERTS (allowlisted evidence host only)"
   );
   pol = await m.read("get_policy", [pVeto]);
   step(
     "no deliverable recorded after reject",
-    pol?.status === "active" && pol?.deliverable_hash === "",
-    `status=${pol?.status} deliv="${pol?.deliverable_hash}"`
+    pol?.status === "active" && pol?.deliverable_url === "",
+    `status=${pol?.status} deliv="${pol?.deliverable_url}"`
   );
 
   // ---- Issue + accept the auto-breach claim target (never delivered) ----
   await write(
     accs.buyer,
     "issue_policy",
-    [pClaim, agentId, COVERAGE, CID_SPEC, deadlineShort],
+    [pClaim, agentId, COVERAGE, SPEC_URL, SPEC_SHA, deadlineShort],
     PREMIUM_UNRATED,
     false,
     "issue job-claim (payable)"
   );
-  await write(accs.agent, "accept_job", [pClaim], 0n, false, "agent accepts job-claim");
+  await write(accs.agent, "accept_job", [pClaim], COVERAGE, false, "agent accepts job-claim (posts coverage bond)");
 
   let profile2 = await m.read("get_profile", [agentId]);
-  // FIX-02 keeps jobs_insured counted at issue (not at accept), so the declined
-  // job-reject still counts. distinct_buyers stayed 1 (same buyer wallet).
-  step("jobs_insured = 3", EQ(profile2?.jobs_insured, 3n), `jobs=${profile2?.jobs_insured}`);
+  // FIX-21 (review item 7): reputation credits at the agent's own accept_job,
+  // never at issue. job-reject was declined, so of the three policies issued
+  // only job-veto and job-claim count. distinct_buyers stayed 1 (same wallet).
+  step("jobs_insured = 2 (only accepted policies count)", EQ(profile2?.jobs_insured, 2n), `jobs=${profile2?.jobs_insured}`);
   step("distinct_buyers = 1", EQ(profile2?.distinct_buyers, 1n), `buyers=${profile2?.distinct_buyers}`);
 
   pool = await m.read("get_pool_info", ["unrated"]);
@@ -443,16 +520,68 @@ async function runE2E(netName, keys) {
     `balance=${genFmt(pool?.balance_atto)} locked=${genFmt(pool?.locked_exposure_atto)}`
   );
 
-  // ---- Negative / gate checks (expect reverts) ----
-  await write(
+  // ---- Negative / gate checks (expect reject-and-refund, FIX-21) ----
+  // A past deadline is caller-fixable, so the contract must NOT revert (a
+  // reverted payable call retains the premium) -- it accepts, refunds in the
+  // same transaction and records why.
+  const balBefore = (await m.read("get_pool_info", ["unrated"]))?.balance_atto;
+  await writeRejected(
     accs.buyer,
     "issue_policy",
-    [pPast, agentId, COVERAGE, CID_SPEC, futureIso(-3600)],
+    [pPast, agentId, COVERAGE, SPEC_URL, SPEC_SHA, futureIso(-3600)],
     PREMIUM_UNRATED,
-    true,
-    "issue with past deadline reverts"
+    pPast,
+    "issue with past deadline is refused",
+    "deadline must be at least"
   );
-  await write(accs.buyer, "file_claim", [pClaim], CLAIM_BOND, true, "premature claim (pre-deadline, no deliverable) reverts");
+  const balAfter = (await m.read("get_pool_info", ["unrated"]))?.balance_atto;
+  // Assert against the EXACT expected ledger rather than comparing two
+  // independently-decoded reads. A u256 read can arrive as a string on one call
+  // and as a JS number on the next (observed on get_pool_info:
+  // locked_exposure_atto came back as number 0, then as string "1000...000"),
+  // and BigInt() of a >2^53 number has already lost precision -- which makes a
+  // two-read comparison fail while both values still print identically. Raw
+  // values are logged so a genuine ledger movement stays visible.
+  step(
+    "past-deadline issue refunded: pool unchanged, no policy",
+    EQ(balAfter, LP_DEPOSIT + PREMIUM_UNRATED * 2n) && (await readRejects("get_policy", [pPast])),
+    `balance ${genFmt(balBefore)} -> ${genFmt(balAfter)} ` +
+      `(raw ${JSON.stringify(balBefore)} -> ${JSON.stringify(balAfter)})`
+  );
+
+  // The premature-claim gate only exists while the policy is before its
+  // deadline. Say so explicitly rather than letting a slow run slip past it --
+  // post-deadline this call settles as a real auto-breach, which would quietly
+  // shift every later pool number instead of failing here.
+  const polEarly = await m.read("get_policy", [pClaim]);
+  step(
+    "premature-claim precondition: job-claim still before its deadline",
+    Date.parse(polEarly?.deadline_iso) > Date.parse(new Date(calNow()).toISOString()),
+    `deadline=${polEarly?.deadline_iso} now=${new Date(calNow()).toISOString()}`
+  );
+  const bondBefore = await m.read("get_pool_info", ["unrated"]);
+  await writeRejected(
+    accs.buyer,
+    "file_claim",
+    [pClaim],
+    CLAIM_BOND,
+    pClaim,
+    "premature claim is refused",
+    "deadline has not passed"
+  );
+  const bondAfter = await m.read("get_pool_info", ["unrated"]);
+  step(
+    "premature claim refunded: bond back, policy untouched",
+    // Exact ledger, not a two-read comparison -- see the note on the
+    // past-deadline check above for why that is unreliable.
+    EQ(bondAfter?.balance_atto, LP_DEPOSIT + PREMIUM_UNRATED * 2n) &&
+      EQ(bondAfter?.locked_exposure_atto, COVERAGE * 2n),
+    `balance ${genFmt(bondBefore?.balance_atto)} -> ${genFmt(bondAfter?.balance_atto)}` +
+      ` locked=${genFmt(bondAfter?.locked_exposure_atto)}` +
+      ` (raw ${JSON.stringify(bondBefore?.balance_atto)} -> ${JSON.stringify(bondAfter?.balance_atto)}` +
+      ` / locked ${JSON.stringify(bondAfter?.locked_exposure_atto)})`
+  );
+
   await write(accs.lp, "withdraw", ["unrated", LP_DEPOSIT], 0n, true, "full LP withdraw under locked exposure reverts");
 
   // ---- Wait until every issued policy is strictly past its deadline ----
@@ -466,7 +595,7 @@ async function runE2E(netName, keys) {
   await write(
     accs.agent,
     "submit_deliverable",
-    [pVeto, CID_OK],
+    [pVeto, DELIV_URL, DELIV_SHA],
     0n,
     true,
     "post-deadline submit REVERTS (deliverable frozen)"
@@ -484,13 +613,21 @@ async function runE2E(netName, keys) {
   const polClaim = await m.read("get_policy", [pClaim]);
   step("policy status = claimed", polClaim?.status === "claimed", `status=${polClaim?.status}`);
   pool = await m.read("get_pool_info", ["unrated"]);
-  // After payout (1 GEN, within 10% cap) + expire of job-veto (no transfer):
-  // balance = 20 + 2*premium - coverage
-  const expectedBal = LP_DEPOSIT + PREMIUM_UNRATED * 2n - COVERAGE;
+  // FIX-22: the coverage payout is drawn from the agent's forfeited bond, so the
+  // pool keeps BOTH live premiums and loses nothing -- LP capital is untouched.
+  // job-veto expired (bond returned, premium kept); job-claim breached (bond
+  // forfeited to the pool and paid straight back out as the coverage).
+  const expectedBal = LP_DEPOSIT + PREMIUM_UNRATED * 2n;
   step(
-    "pool paid coverage, exposure released",
+    "pool made whole by the bond (keeps both premiums, pays no LP capital)",
     EQ(pool?.balance_atto, expectedBal) && EQ(pool?.locked_exposure_atto, 0n),
     `balance=${genFmt(pool?.balance_atto)} (want ${genFmt(expectedBal)}) locked=${genFmt(pool?.locked_exposure_atto)}`
+  );
+  const acc2 = await m.read("get_accounting", ["unrated"]);
+  step(
+    "all agent bonds returned (escrow 0)",
+    EQ(acc2?.agent_bond_escrow_atto, 0n),
+    `escrow=${genFmt(acc2?.agent_bond_escrow_atto)}`
   );
 
   let profile3 = await m.read("get_profile", [agentId]);

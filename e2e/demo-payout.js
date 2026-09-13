@@ -1,15 +1,22 @@
 // Proofmark — rerun submission §05 (the reviewer's path) end-to-end on the
-// FIXED canonical (PAYOUT-FIX-20 EthSend rail), so the whole loop is on-chain:
+// FIX-22 canonical, so the whole loop is on-chain:
 //   register agent -> LP funds Unrated 10 (+ Bronze 5 / Silver 3 / Gold 2) ->
-//   issue 1 GEN cover @ 0.06 premium, short deadline, CID spec -> accept ->
-//   deadline passes with no deliverable -> file_claim (2 GEN bond) ->
-//   deterministic auto-breach -> upheld -> buyer paid 1 GEN, bond refunded.
+//   issue 1 GEN cover @ 0.06 premium, short deadline, commit-pinned GitHub spec
+//   -> agent accepts, posting the 1 GEN coverage bond -> deadline passes with no
+//   deliverable -> file_claim (2 GEN bond) -> deterministic auto-breach ->
+//   upheld -> buyer paid 1 GEN OUT OF THE AGENT'S BOND, pool untouched.
 //
 // Unlike run.js e2e (which asserts pool-ledger rows), this run also inspects the
 // file_claim transaction's triggered children. Under the old broken rail the
 // payout children finalized "GenVM Execution ERROR" (IC-to-IC PostMessage to an
 // EOA that cannot receive it). Under the fix the value leaves over the external
-// EthSend rail, so no errored child may exist and the pool must debit exactly 1 GEN.
+// EthSend rail, so no errored child may exist.
+//
+// FIX-22 note: the pool must NOT be debited by the payout — the forfeited agent
+// bond funds it. Pool assertions are therefore written as DELTAS against the
+// board read at step 0, so this harness is re-runnable on a board that already
+// carries activity (e.g. after seed-live.js). On a fresh contract the deltas
+// reduce to the §05 numbers: Unrated ends at 10.0600 GEN.
 //
 // Usage:  node e2e/demo-payout.js            (full run, writes results/demo-payout.log)
 //
@@ -28,7 +35,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GEN = 10n ** 18n;
 const COVERAGE = GEN; // 1 GEN
 const CLAIM_BOND = 2n * GEN;
-const SPEC_CID = "Qm" + "a".repeat(44); // content never fetched (auto-breach path)
+// FIX-22: evidence is a commit-pinned GitHub raw URL + the sha256 of the exact
+// bytes. The auto-breach path never fetches the spec, so only the URL shape is
+// validated on-chain; the sha256 only has to be 64 hex characters.
+const SPEC_COMMIT = "a".repeat(40);
+const SPEC_URL = `https://raw.githubusercontent.com/proofmark-demo/evidence/${SPEC_COMMIT}/spec.txt`;
+const SPEC_SHA256 = "0".repeat(64);
 const DEPOSITS = { unrated: 10n * GEN, bronze: 5n * GEN, silver: 3n * GEN, gold: 2n * GEN };
 const DEADLINE_S = 180; // short enough that one wait settles the payout
 const WAIT_BUFFER_S = 30;
@@ -150,7 +162,12 @@ async function main() {
   log(`jobId:    ${jobId}`);
   log(`lp/buyer roles from e2e/keys.json: lp=${LP} buyer=${BUYER}\n`);
 
-  // ---- Step 0: read-verify the fresh deploy has empty pools ----
+  // ---- Step 0: read the board BEFORE this run's writes ----
+  // FIX-22 assertions are deltas against this baseline, so the harness works on
+  // a fresh contract AND on one that already carries seed-live activity.
+  const unratedBefore = await m.read("get_pool_info", ["unrated"]);
+  const baseBalance = toB(unratedBefore?.balance_atto);
+  const baseLocked = toB(unratedBefore?.locked_exposure_atto);
   for (const tier of Object.keys(DEPOSITS)) {
     const p = await m.read("get_pool_info", [tier]);
     log(`pool ${tier} before: balance=${genFmt(p?.balance_atto)} locked=${genFmt(p?.locked_exposure_atto)}`);
@@ -185,17 +202,17 @@ async function main() {
   const issued = await write(
     accs.buyer,
     "issue_policy",
-    [jobId, agentId, COVERAGE, SPEC_CID, deadlineIso],
+    [jobId, agentId, COVERAGE, SPEC_URL, SPEC_SHA256, deadlineIso],
     quote?.premium_atto ?? 0n,
     `issue ${jobId} 1 GEN cover @ premium (window B)`
   );
   const issueHash = issued.hash;
 
-  // ---- Step 4: agent accepts ----
-  await write(liveWallet, "accept_job", [jobId], 0n, "agent accepts job (window A)");
+  // ---- Step 4: agent accepts, posting the FIX-22 coverage bond ----
+  await write(liveWallet, "accept_job", [jobId], COVERAGE, "agent accepts job + posts 1 GEN bond (window A)");
 
   let pol = await m.read("get_policy", [jobId]);
-  log(`policy ${jobId}: status=${pol?.status} agent_id=${pol?.agent_id} deadline=${pol?.deadline_iso ?? pol?.deadline}`);
+  log(`policy ${jobId}: status=${pol?.status} agent_id=${pol?.agent_id} bond=${genFmt(pol?.agent_bond_atto)} deadline=${pol?.deadline_iso ?? pol?.deadline}`);
   let unrated = await m.read("get_pool_info", ["unrated"]);
   log(`unrated during run: balance=${genFmt(unrated?.balance_atto)} locked=${genFmt(unrated?.locked_exposure_atto)}\n`);
 
@@ -233,14 +250,23 @@ async function main() {
   log(`issue_policy (payable, 1 GEN cover): ${issueHash}`);
   log(`file_claim (2 GEN bond, payout):     ${claimHash}`);
   log(`claim_status: ${status}`);
+  // FIX-22: the payout came out of the agent's forfeited bond, so the Unrated
+  // pool should hold exactly what it held before this run PLUS this run's own
+  // 10 GEN deposit and the premium -- zero LP capital spent on the payout.
+  const premium = toB(quote?.premium_atto ?? 0n);
+  const expectedBalance = baseBalance + 10n * GEN + premium;
+  const expectedLocked = baseLocked; // this run's 1 GEN lock released; nothing else touched
   log(
-    `unrated pool: ${genFmt(10n * GEN)} funded + 0.06 premium - 1.00 payout -> ${genFmt(unrated?.balance_atto)} (want 9.0600), locked ${genFmt(unrated?.locked_exposure_atto)}`
+    `unrated pool: ${genFmt(baseBalance)} before -> ${genFmt(unrated?.balance_atto)} after ` +
+      `(want ${genFmt(expectedBalance)} = baseline + 10 GEN deposit + ${genFmt(premium)} premium; ` +
+      `payout paid from the agent bond, not LP capital)`
   );
+  log(`unrated locked: ${genFmt(baseLocked)} before -> ${genFmt(unrated?.locked_exposure_atto)} after (want ${genFmt(expectedLocked)})`);
   const checks = {
     "claim upheld": status === "upheld",
     "policy claimed": pol?.status === "claimed",
-    "pool 10.06 - 1.00 = 9.06": toB(unrated?.balance_atto) === 9060000000000000000n,
-    "pool locked released to 0": toB(unrated?.locked_exposure_atto) === 0n,
+    "pool keeps its capital (bond funded the payout)": toB(unrated?.balance_atto) === expectedBalance,
+    "this run's lock released; nothing else left locked": toB(unrated?.locked_exposure_atto) === expectedLocked,
     "no errored payout children (EthSend rail)": erroredChildren.length === 0,
   };
   for (const [name, ok] of Object.entries(checks)) {
@@ -266,7 +292,9 @@ async function main() {
         claimHash,
         children,
         claimStatus: status,
+        unratedBefore: { balance: String(baseBalance), locked: String(baseLocked) },
         unratedAfter: { balance: String(unrated?.balance_atto), locked: String(unrated?.locked_exposure_atto) },
+        expectedAfter: { balance: String(expectedBalance), locked: String(expectedLocked) },
         allOk,
       },
       null,

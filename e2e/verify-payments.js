@@ -7,15 +7,25 @@
 // Usage:
 //   node e2e/verify-payments.js --network studionet [--address <hex>]
 //   node e2e/verify-payments.js --network bradbury  [--address <hex>]
-//   REAL_SPEC_CID=... REAL_DELIV_CID=... node e2e/verify-payments.js --network studionet
+//   REAL_SPEC_URL=... REAL_SPEC_SHA256=... REAL_DELIV_URL=... REAL_DELIV_SHA256=... \
+//     node e2e/verify-payments.js --network studionet
 //
 // Three transfers verified:
 //   1. LP deposit  -> withdraw : GEN leaves the LP wallet, enters the pool,
 //                                and returns to the LP wallet.
-//   2. Auto-breach claim       : pool pays COVERAGE to the buyer; the 2 GEN
-//                                claim bond is refunded. Buyer wallet rises.
-//   3. Judged rejected claim   : bond is forfeited to the pool (requires two
-//                                real pinned CIDs -- REAL_SPEC_CID/REAL_DELIV_CID).
+//   2. Auto-breach claim       : the AGENT'S FORFEITED BOND pays COVERAGE to the
+//                                buyer and the 2 GEN claim bond is refunded. The
+//                                tier pool balance does NOT move (FIX-22) -- the
+//                                pre-fix version drained LP capital instead.
+//   3. Judged claim            : TWO-PHASE (FIX-19). file_claim escrows a
+//                                PENDING claim; the permissionless judge_claim
+//                                then re-fetches BOTH real commit-pinned GitHub
+//                                files and runs the conformance LLM through
+//                                validator consensus. A rejected verdict
+//                                forfeits the claim bond to the pool; an upheld
+//                                one pays the buyer out of the agent's bond.
+//                                Requires a real spec+deliverable url/sha256
+//                                pair (see REAL_* env vars below).
 //
 // Balance-enforcement note: StudioNet is gasless and does NOT enforce balances,
 // so wallet-level deltas there are informational only (logged, not failed) --
@@ -196,20 +206,28 @@ async function runVerification(netName, contractAddress) {
   await m.submitAndWait(agentWallet.account, "register", [agentId], 0n);
 
   const deadline = new Date(Date.now() + 65_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  // FIX-22: evidence is a commit-pinned GitHub raw URL + the sha256 of the exact
+  // bytes. The auto-breach path never fetches the spec, so only the URL SHAPE is
+  // checked on-chain here; the judged path below uses a real resolvable pair.
+  const specUrl = `https://raw.githubusercontent.com/proofmark-e2e/evidence/${"a".repeat(40)}/spec.txt`;
+  const specSha = "0".repeat(64);
   await m.submitAndWait(
     accs.buyer.account,
     "issue_policy",
-    [jobId, agentId, COVERAGE, "Qm" + "a".repeat(44), deadline],
+    [jobId, agentId, COVERAGE, specUrl, specSha, deadline],
     PREMIUM
   );
-  await m.submitAndWait(agentWallet.account, "accept_job", [jobId], 0n); // Shape B consent
-  console.log(`  issued ${jobId} on agent ${agentId}, accepted; waiting 70s for the 65s deadline to pass...`);
+  // Shape B consent + the FIX-22 agent bond: the agent must post the coverage.
+  await m.submitAndWait(agentWallet.account, "accept_job", [jobId], COVERAGE);
+  console.log(`  issued ${jobId} on agent ${agentId}, accepted with a ${fmtGen(COVERAGE)} bond; waiting 70s for the 65s deadline to pass...`);
   await sleep(70_000);
 
   const buyer_before_claim = await getBalance(readClient, BUYER);
   const pool_before_claim = await m.read("get_pool_info", ["unrated"]);
+  const escrow_before_claim = await m.read("get_accounting", ["unrated"]);
   console.log(`  Buyer wallet before claim:   ${fmtGen(buyer_before_claim)}`);
   console.log(`  Pool balance before claim:   ${fmtGen(pool_before_claim?.balance_atto)}`);
+  console.log(`  Agent bond escrow:           ${fmtGen(escrow_before_claim?.agent_bond_escrow_atto)}`);
   console.log(`  Expected payout:             ${fmtGen(COVERAGE)}   expected bond refund: ${fmtGen(BOND)}`);
 
   const claim = await m.submitAndWait(accs.buyer.account, "file_claim", [jobId], BOND);
@@ -221,6 +239,7 @@ async function runVerification(netName, contractAddress) {
   await sleep(5_000); // let emit_transfer(on="finalized") credit
   const buyer_after_claim = await getBalance(readClient, BUYER);
   const pool_after_claim = await m.read("get_pool_info", ["unrated"]);
+  const escrow_after_claim = await m.read("get_accounting", ["unrated"]);
   const buyer_net_delta =
     buyer_before_claim !== null && buyer_after_claim !== null ? buyer_after_claim - buyer_before_claim : null;
   const pool_delta_claim = BigInt(pool_before_claim?.balance_atto ?? 0) - BigInt(pool_after_claim?.balance_atto ?? 0);
@@ -235,30 +254,44 @@ async function runVerification(netName, contractAddress) {
     `delta: ${fmtGen(buyer_net_delta)} (expected positive: payout + bond refund - bond paid)`,
     netName
   );
+  // FIX-22: the payout is drawn from the agent's forfeited bond, so the tier
+  // pool is MADE WHOLE -- its balance does not move at all. Before the bond this
+  // was the drain: the pool paid the coverage and LP capital shrank.
   check(
-    "Pool balance ACTUALLY decreased by the payout",
-    pool_delta_claim > 0n,
+    "Pool balance UNCHANGED by the payout (agent bond funded it, FIX-22)",
+    pool_delta_claim === 0n,
     `pool before: ${fmtGen(pool_before_claim?.balance_atto)} after: ${fmtGen(pool_after_claim?.balance_atto)} delta: ${fmtGen(pool_delta_claim)}`
+  );
+  check(
+    "Agent bond left escrow (forfeited to the pool, then paid out)",
+    BigInt(escrow_after_claim?.agent_bond_escrow_atto ?? -1) === 0n,
+    `escrow before: ${fmtGen(escrow_before_claim?.agent_bond_escrow_atto)} after: ${fmtGen(escrow_after_claim?.agent_bond_escrow_atto)}`
   );
   if (netName === "bradbury") {
     check(
-      "[BRADBURY] Pool debit == expected payout",
-      pool_delta_claim === COVERAGE,
-      `expected: ${fmtGen(COVERAGE)} actual: ${fmtGen(pool_delta_claim)}`
+      "[BRADBURY] Pool debit == 0 and the bond covered the payout",
+      pool_delta_claim === 0n,
+      `expected: 0 actual: ${fmtGen(pool_delta_claim)} (coverage ${fmtGen(COVERAGE)} came from the bond)`
     );
   }
 
   // -------------------------------------------------------------------------
-  // VERIFICATION 3 (optional): judged REJECTED claim -> bond forfeited to pool
-  // Requires two real pinned, publicly resolvable CIDs. Outcome is whatever the
+  // VERIFICATION 3 (optional): judged claim
+  // Requires a real commit-pinned GitHub evidence pair for BOTH the spec and the
+  // deliverable (url + sha256 of the exact bytes). Outcome is whatever the
   // validator LLM majority decides -- both upheld and rejected prove the judged
   // path executes; the bond-forfeiture asserts only hold on a "rejected" verdict.
   // -------------------------------------------------------------------------
   console.log("\n--- Verification 3: judged claim (bond path) ---");
-  const realSpec = process.env.REAL_SPEC_CID;
-  const realDeliv = process.env.REAL_DELIV_CID;
-  if (!realSpec || !realDeliv) {
-    console.log("  [SKIP] REAL_SPEC_CID / REAL_DELIV_CID not set -- set them to run the judged path.");
+  const realSpecUrl = process.env.REAL_SPEC_URL;
+  const realSpecSha = process.env.REAL_SPEC_SHA256;
+  const realDelivUrl = process.env.REAL_DELIV_URL;
+  const realDelivSha = process.env.REAL_DELIV_SHA256;
+  if (!realSpecUrl || !realSpecSha || !realDelivUrl || !realDelivSha) {
+    console.log(
+      "  [SKIP] REAL_SPEC_URL/REAL_SPEC_SHA256/REAL_DELIV_URL/REAL_DELIV_SHA256 not set " +
+        "-- set all four to run the judged path."
+    );
   } else {
     const suffix3 = `${netName}-${Date.now()}`;
     const agentId3 = `verify-agent3-${suffix3}`;
@@ -271,34 +304,76 @@ async function runVerification(netName, contractAddress) {
     // Short deadline (90s): deliverable is submitted immediately, then we wait
     // past the deadline and file a *judged* claim (deliverable present).
     const deadline3 = new Date(Date.now() + 90_000).toISOString().replace(/\.\d{3}Z$/, "Z");
-    await m.submitAndWait(accs.buyer.account, "issue_policy", [jobId3, agentId3, COVERAGE, realSpec, deadline3], PREMIUM);
-    await m.submitAndWait(wallet3.account, "accept_job", [jobId3], 0n);
-    await m.submitAndWait(wallet3.account, "submit_deliverable", [jobId3, realDeliv], 0n); // live probe: must resolve
-    console.log(`  submitted real deliverable ${realDeliv} on ${jobId3}; waiting ~100s for deadline...`);
+    await m.submitAndWait(accs.buyer.account, "issue_policy", [jobId3, agentId3, COVERAGE, realSpecUrl, realSpecSha, deadline3], PREMIUM);
+    await m.submitAndWait(wallet3.account, "accept_job", [jobId3], COVERAGE);
+    await m.submitAndWait(wallet3.account, "submit_deliverable", [jobId3, realDelivUrl, realDelivSha], 0n); // live probe: must resolve AND hash-match
+    console.log(`  submitted real deliverable ${realDelivUrl} on ${jobId3}; waiting ~100s for deadline...`);
     await sleep(100_000);
 
     const pool_before_judged = await m.read("get_pool_info", ["unrated"]);
+    const escrow_before_judged = await m.read("get_accounting", ["unrated"]);
     const buyer_before_judged = await getBalance(readClient, BUYER);
-    const judged = await m.submitAndWait(accs.buyer.account, "file_claim", [jobId3], BOND);
-    check("Judged-claim tx finalized", judged.ok, `hash: ${judged.hash} status: ${judged.execName}`);
 
-    let judgedStatus = "unresolved";
-    for (let i = 0; i < 60; i++) {
-      judgedStatus = await m.read("get_claim_status", [jobId3]);
-      if (judgedStatus !== "unresolved") break;
-      await sleep(5_000);
+    // Phase 1 of the two-phase claim (FIX-19 / H-02): file_claim is
+    // DETERMINISTIC -- it escrows the bond and records a PENDING claim. It must
+    // NOT produce a verdict by itself, so the judgement below is a genuinely
+    // separate, retryable step.
+    const filed = await m.submitAndWait(accs.buyer.account, "file_claim", [jobId3], BOND);
+    check("Claim filed and escrowed (tx finalized)", filed.ok, `hash: ${filed.hash} status: ${filed.execName}`);
+    const pendingStatus = await m.read("get_claim_status", [jobId3]);
+    check(
+      "Two-phase claim: file_claim left a PENDING claim, no verdict yet",
+      pendingStatus === "pending",
+      `get_claim_status immediately after file_claim: ${pendingStatus}`
+    );
+
+    // Phase 2: the judgement. judge_claim is PERMISSIONLESS and NON-payable --
+    // called here by the LP account on purpose, to prove any third party can
+    // settle a pending claim and that a failed judgement risks no value. It
+    // re-fetches BOTH real GitHub files, re-hashes them against the digests
+    // committed on-chain at issue/submit time, and runs the conformance prompt
+    // through validator consensus. A [TRANSIENT] evidence-host outage reverts
+    // with nothing attached, so retrying is always safe.
+    let judgedStatus = "pending";
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const judged = await m.submitAndWait(accs.lp.account, "judge_claim", [jobId3], 0n);
+      console.log(
+        `  judge_claim attempt ${attempt}: ${judged.ok ? "ok" : "reverted"} ` +
+          `(${judged.execName}) hash: ${judged.hash}`
+      );
+      for (let i = 0; i < 60; i++) {
+        judgedStatus = await m.read("get_claim_status", [jobId3]);
+        if (judgedStatus === "upheld" || judgedStatus === "rejected") break;
+        await sleep(5_000);
+      }
+      if (judgedStatus === "upheld" || judgedStatus === "rejected") break;
     }
-    check("Judged claim reached a verdict (not stuck unresolved)", judgedStatus !== "unresolved", `status: ${judgedStatus}`);
+    check(
+      "Judged consensus reached a REAL verdict (upheld or rejected)",
+      judgedStatus === "upheld" || judgedStatus === "rejected",
+      `get_claim_status: ${judgedStatus}`
+    );
     console.log(`  JUDGED_CLAIM_RESULT=${judgedStatus}`);
 
     if (judgedStatus === "rejected") {
       await sleep(5_000);
       const pool_after_judged = await m.read("get_pool_info", ["unrated"]);
+      const escrow_after_judged = await m.read("get_accounting", ["unrated"]);
       const buyer_after_judged = await getBalance(readClient, BUYER);
+      const pool_delta_judged =
+        BigInt(pool_after_judged?.balance_atto ?? 0) - BigInt(pool_before_judged?.balance_atto ?? 0);
       check(
-        "Pool ACTUALLY received the forfeited bond",
-        BigInt(pool_after_judged?.balance_atto ?? 0) > BigInt(pool_before_judged?.balance_atto ?? 0),
-        `pool before: ${fmtGen(pool_before_judged?.balance_atto)} after: ${fmtGen(pool_after_judged?.balance_atto)}`
+        "Rejected verdict: pool received EXACTLY the forfeited claim bond",
+        pool_delta_judged === BOND,
+        `pool before: ${fmtGen(pool_before_judged?.balance_atto)} after: ${fmtGen(pool_after_judged?.balance_atto)} ` +
+          `delta: ${fmtGen(pool_delta_judged)} expected: ${fmtGen(BOND)}`
+      );
+      check(
+        "Rejected verdict: agent's bond returned (a failed claim is not a breach)",
+        BigInt(escrow_before_judged?.agent_bond_escrow_atto ?? -1) -
+          BigInt(escrow_after_judged?.agent_bond_escrow_atto ?? -1) === COVERAGE,
+        `escrow before: ${fmtGen(escrow_before_judged?.agent_bond_escrow_atto)} ` +
+          `after: ${fmtGen(escrow_after_judged?.agent_bond_escrow_atto)} (expected -${fmtGen(COVERAGE)})`
       );
       walletCheck(
         "Buyer wallet decreased (bond NOT refunded on rejected claim)",
@@ -309,7 +384,13 @@ async function runVerification(netName, contractAddress) {
         netName
       );
     } else if (judgedStatus === "upheld") {
-      console.log("  Verdict = upheld: payout went to the buyer (bond-refund path). Judged consensus still proven.");
+      await sleep(5_000);
+      const pool_after_judged = await m.read("get_pool_info", ["unrated"]);
+      check(
+        "Upheld verdict: pool UNCHANGED (the forfeited agent bond funded the payout, FIX-22)",
+        BigInt(pool_after_judged?.balance_atto ?? 0) === BigInt(pool_before_judged?.balance_atto ?? 0),
+        `pool before: ${fmtGen(pool_before_judged?.balance_atto)} after: ${fmtGen(pool_after_judged?.balance_atto)}`
+      );
     }
   }
 
