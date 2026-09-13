@@ -28,6 +28,9 @@ import {
   formatAttoToGen,
   cleanContractError,
   toBig,
+  toRawEvidenceUrl,
+  fetchEvidenceSha256,
+  EVIDENCE_HOST,
 } from "@/lib/proofmarkClient";
 import { useIdentity } from "@/app/providers";
 import { IdentityBadge } from "@/components/IdentityBadge";
@@ -105,30 +108,32 @@ type FeedEntry = {
   ts: number;
 };
 
-// Canonical seeded StudioNet deployment only (PAYOUT-FIX-20 fixed contract,
-// 2026-09-08): on a brand-new browser (empty localStorage), replay the REAL seed
-// transactions from e2e/demo-payout.js into the feed so "Recent activity" matches
-// the funded board a first-time reviewer sees. Every entry below is a genuine
-// finalized write on that contract -- register agent-live-1788895030112, the
-// four LP deposits, the 1 GEN cover on job-live-1788895030112, and the settled
-// payout (same job, claimed + upheld 2026-09-08; the file_claim's two child
-// transfers finalized as clean EthSend credits to the buyer EOA -- 1 GEN payout
-// + 2 GEN bond refund, NO Execution ERROR). ids/amounts identical to the on-chain
-// txs, stamped with the actual run time (the ids embed Date.now()). Any other
-// network or address keeps the feed local-only.
-const SEEDED_CONTRACT = "0x65319a2787be8a57ee570fd0eb61a69887d91099";
-const SEED_TS = 1788895030112; // Date.now() when demo-payout.js ran (2026-09-08)
+// Canonical seeded StudioNet deployment only (FIX-22 contract, 2026-09-12): on a
+// brand-new browser (empty localStorage), replay the REAL activity on that
+// contract into the feed so "Recent activity" matches the board a first-time
+// reviewer sees. Every entry below is a genuine finalized write on
+// 0x849b576f… -- two agents registered, both 1 GEN covers issued, one settled
+// upheld claim (the §05 demo: deadline passed with nothing delivered, the
+// agent's bond paid the buyer, no LP capital spent), and the LP capital that
+// backs each tier. ids/amounts mirror the on-chain txs; the ids embed Date.now()
+// so the timestamps come from the runs themselves.
+// Any other network or address keeps the feed local-only.
+const SEEDED_CONTRACT = "0x849b576f64eca308300d278223951e4a88e1b5d4";
+const SEED_TS = 1789233308766; // Date.now() when the §05 demo run landed (2026-09-12)
 const SEED_ACTIVITY: FeedEntry[] = [
-  // Settled 2026-09-08: the job's deadline passed with nothing delivered; the
-  // deterministic auto-breach claim resolved upheld, so a finished payout sits
-  // on the board (Unrated 9.06, lock 0) -- paid over the external EthSend rail.
-  { action: "verdict", jobId: "job-live-1788895030112", verdict: "upheld", ts: SEED_TS },
-  { action: "issue", jobId: "job-live-1788895030112", agentId: "agent-live-1788895030112", amount: "0.06 GEN", tier: "Unrated", ts: SEED_TS },
-  { action: "deposit", amount: "2 GEN", tier: "Gold", ts: SEED_TS },
-  { action: "deposit", amount: "3 GEN", tier: "Silver", ts: SEED_TS },
-  { action: "deposit", amount: "5 GEN", tier: "Bronze", ts: SEED_TS },
-  { action: "deposit", amount: "10 GEN", tier: "Unrated", ts: SEED_TS },
-  { action: "register", agentId: "agent-live-1788895030112", ts: SEED_TS },
+  // The §05 demo claim, settled: auto-breach upheld, paid from the agent bond.
+  { action: "verdict", jobId: "job-live-1789233308766", verdict: "upheld", ts: SEED_TS },
+  { action: "issue", jobId: "job-live-1789233308766", agentId: "agent-live-1789233308766", amount: "0.06 GEN", tier: "Unrated", ts: SEED_TS },
+  { action: "register", agentId: "agent-live-1789233308766", ts: SEED_TS - 60_000 },
+  // The seed policy, still LIVE: active with a 1 GEN bond escrowed (the locked
+  // sliver the board shows), so there is deliberately no verdict entry for it.
+  { action: "issue", jobId: "job-live-1789232711989", agentId: "agent-live-1789232711989", amount: "0.06 GEN", tier: "Unrated", ts: SEED_TS - 600_000 },
+  { action: "register", agentId: "agent-live-1789232711989", ts: SEED_TS - 660_000 },
+  // LP capital: these ARE the tier balances the board reads, on-chain right now.
+  { action: "deposit", amount: "4 GEN", tier: "Gold", ts: SEED_TS - 700_000 },
+  { action: "deposit", amount: "6 GEN", tier: "Silver", ts: SEED_TS - 720_000 },
+  { action: "deposit", amount: "10 GEN", tier: "Bronze", ts: SEED_TS - 740_000 },
+  { action: "deposit", amount: "20 GEN", tier: "Unrated", ts: SEED_TS - 760_000 },
 ];
 
 function readFeed(): FeedEntry[] {
@@ -206,9 +211,145 @@ function Notice({ n, style }: { n: Notice; style?: CSSProperties }) {
   );
 }
 
+/* ------------------------------------------------------- evidence (FIX-22) */
+// Evidence is a permanently-linked file on GitHub, not a file upload and not an
+// IPFS CID. The buyer and the agent use the same three steps, so both sides of a
+// job commit to exactly the same bytes and validators can re-fetch them years
+// later. Pasting the link here opens it in YOUR browser, fingerprints it
+// (sha256), and shows the byte count before anything touches the chain.
+
+type Evidence = {
+  /** The canonical https://raw.githubusercontent.com/... link that is committed. */
+  rawUrl: string;
+  /** sha256 of the exact bytes, committed on-chain alongside the link. */
+  sha256: string;
+  /** Size of those bytes -- so the user can sanity-check the right file. */
+  bytes: number;
+  /** First few hundred bytes of the file, so the user sees what was fingerprinted. */
+  preview: string;
+};
+
+function EvidenceInput({
+  id,
+  label,
+  what,
+  hint,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  /** Plain-language noun for the file, e.g. "the spec" or "the deliverable". */
+  what: string;
+  hint?: string;
+  value: Evidence | null;
+  onChange: (e: Evidence | null) => void;
+}) {
+  const [link, setLink] = useState("");
+  const [n, setN] = useState<Notice>(idleNotice);
+  const [busy, setBusy] = useState(false);
+
+  async function doCheck() {
+    setBusy(true);
+    setN({ status: "pending", title: "Opening your link and fingerprinting the file…" });
+    try {
+      const rawUrl = toRawEvidenceUrl(link);
+      const { sha256, bytes, preview } = await fetchEvidenceSha256(rawUrl);
+      onChange({ rawUrl, sha256, bytes, preview });
+      setN({
+        status: "ok",
+        title: `Ready — ${bytes.toLocaleString()} bytes fingerprinted`,
+        detail: `sha256 ${sha256}`,
+      });
+    } catch (e: any) {
+      onChange(null);
+      setN({ status: "error", title: "That link can't be used yet", detail: errText(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <input
+        id={id}
+        className="input"
+        value={link}
+        onChange={(e) => {
+          setLink(e.target.value);
+          if (value) onChange(null); // edited link must be re-checked
+          setN(idleNotice);
+        }}
+        placeholder="https://github.com/you/your-repo/blob/…/file.md"
+      />
+      <div className="btn-row" style={{ marginTop: 8 }}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={busy || !link.trim()}
+          onClick={doCheck}
+        >
+          {busy ? "Checking…" : value ? "Re-check link" : "Check this link"}
+        </button>
+      </div>
+      <p className="hint" style={{ marginTop: 6 }}>
+        How to get this link, in three steps:
+      </p>
+      <ol className="hint" style={{ marginTop: 0, paddingLeft: 20 }}>
+        <li>Put {what} in any public GitHub repository.</li>
+        <li>
+          Open the file on GitHub, click <strong>History</strong>, and open the version you
+          want to lock in.
+        </li>
+        <li>
+          Copy the address bar and paste it above. We open it, fingerprint it, and show you
+          the size — then that exact fingerprint goes on-chain.
+        </li>
+      </ol>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Anything that changes the file changes its fingerprint, so a link that still works
+        later is proof the file was never altered. Only files on{" "}
+        <span className="mono">{EVIDENCE_HOST}</span> can be checked, and the link must name
+        one exact version (a 40-character commit id), never a branch.
+        {hint ? <> {hint}</> : null}
+      </p>
+      <Notice n={n} />
+      {value && (
+        <div className="evidence-box">
+          <div className="evidence-row">
+            <span className="pol-k">File size</span>
+            <span className="mono">{value.bytes.toLocaleString()} bytes</span>
+          </div>
+          <div className="evidence-row">
+            <span className="pol-k">Fingerprint (sha256)</span>
+            <span className="mono evidence-hash">{value.sha256}</span>
+          </div>
+          <div className="evidence-row">
+            <span className="pol-k">Link</span>
+            <a
+              className="mono evidence-link"
+              href={value.rawUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {value.rawUrl} ↗
+            </a>
+          </div>
+          {value.preview && (
+            <details className="evidence-peek">
+              <summary>Preview what was fingerprinted</summary>
+              <pre>{value.preview}</pre>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Last-N confirmed writes, persisted locally so the board survives reloads. */
-function Feed() {
-  const [entries, setEntries] = useState<FeedEntry[]>([]);
+function Feed() {  const [entries, setEntries] = useState<FeedEntry[]>([]);
 
   useEffect(() => {
     seedFeedOnce(); // a fresh browser on the seeded deploy sees its real history
@@ -473,14 +614,19 @@ type PolicyInfo = {
   buyer: string;
   agent_id: string;
   coverage_atto: number | bigint;
-  spec_hash: string;
-  deliverable_hash: string;
+  // FIX-22 evidence: a commit-pinned GitHub link + the sha256 of the exact bytes
+  // it serves. Not a CID -- see lib/proofmarkClient.ts.
+  spec_url: string;
+  spec_sha256: string;
+  deliverable_url: string;
+  deliverable_sha256: string;
   deadline_iso: string;
   pool_tier: Tier;
   // M-01: the contract also returns "pending" (policy issued, agent has not
   // accepted yet) -- the frontend type must not drop states the contract can
   // actually return.
   status: "pending" | "active" | "claimed" | "expired";
+  agent_bond_atto: number | bigint;
 };
 
 type Verdict = "unresolved" | "pending" | "upheld" | "rejected";
@@ -493,11 +639,11 @@ type PolicyDisplayState = {
 
 /** Turn raw policy fields into a plain-language statement of where the job
  * stands. "active" is only set once the agent accepts; a "pending" policy is
- * still awaiting acceptance. The real claim signal is deliverable_hash +
+ * still awaiting acceptance. The real claim signal is the deliverable link +
  * deadline vs now: an empty deliverable past the deadline is an automatic
  * breach the buyer can claim with no risk. */
 function derivePolicyState(p: PolicyInfo): PolicyDisplayState {
-  const hasDeliv = (p.deliverable_hash ?? "").trim().length > 0;
+  const hasDeliv = (p.deliverable_url ?? "").trim().length > 0;
   const dl = Date.parse(p.deadline_iso);
   const pastDeadline = Number.isNaN(dl) ? false : dl <= Date.now();
   if (p.status === "pending")
@@ -872,7 +1018,9 @@ function CoveragePanel({
   const [jobId, setJobId] = useState("job-001");
   const [covAgentId, setCovAgentId] = useState("agent-alice");
   const [coverage, setCoverage] = useState("1");
-  const [specHash, setSpecHash] = useState("");
+  // The spec the job is judged against: verified in-browser, then committed
+  // as (link, sha256) on-chain at issue time.
+  const [spec, setSpec] = useState<Evidence | null>(null);
   const [deadline, setDeadline] = useState(() => {
     const d = new Date(Date.now() + 30 * 86400000);
     return d.toISOString().slice(0, 19) + "Z";
@@ -977,6 +1125,15 @@ function CoveragePanel({
         });
         return;
       }
+      if (!spec) {
+        setIssueN({
+          status: "error",
+          title: "Check the spec link first",
+          detail:
+            "Paste a link to the spec file and press “Check this link”. The job is judged against those exact bytes, so the link and its fingerprint must be locked in before backing.",
+        });
+        return;
+      }
       setIssueN({ status: "pending", title: "Backing job on-chain…" });
       const addr = await ensureWallet();
       const job = jobId.trim();
@@ -986,7 +1143,8 @@ function CoveragePanel({
         job,
         agent,
         cov,
-        specHash.trim(),
+        spec.rawUrl,
+        spec.sha256,
         deadline,
         quote.premiumAtto
       );
@@ -1039,18 +1197,25 @@ function CoveragePanel({
     }
   }
 
-  /** Agent-only: bind a pending policy by accepting it (pending -> active).
-   * Only the wallet registered as the policy's agent succeeds; the contract
-   * enforces it, and the notice shows the revert if a wrong wallet tries. */
+  /** Agent-only: bind a pending policy by accepting it (pending -> active), and
+   * post the FIX-22 agent bond. Only the wallet registered as the policy's agent
+   * succeeds; the contract enforces it, and the notice shows the revert if a
+   * wrong wallet tries. The bond is what pays a breach claim — never LP capital
+   * — and it comes back in full when the job is delivered or expires. */
   async function doAccept() {
-    setActN({ status: "pending", title: "Accepting job on-chain…" });
+    if (!pol) return;
+    const bond = toBig(pol.coverage_atto);
+    setActN({
+      status: "pending",
+      title: `Posting ${gen(bond)} GEN bond and accepting…`,
+    });
     try {
       const addr = await ensureWallet();
-      const { hash } = await acceptJob(addr, polJob.trim());
+      const { hash } = await acceptJob(addr, polJob.trim(), bond);
       setActN({
         status: "ok",
-        title: "Job accepted",
-        detail: `tx ${hash} — coverage is now live. The clock is running.`,
+        title: "Job accepted — bond posted",
+        detail: `tx ${hash} — coverage is live and the clock is running. Your ${gen(bond)} GEN bond is held and returns in full if you deliver or the job expires.`,
       });
       await doPolicyLookup(); // refresh the card: pending -> Waiting for delivery
     } catch (e: any) {
@@ -1080,7 +1245,7 @@ function CoveragePanel({
           ? "delivered"
           : "awaiting"
       : st?.cls ?? "";
-  const noDeliverable = !pol || !(pol.deliverable_hash ?? "").trim();
+  const noDeliverable = !pol || !(pol.deliverable_url ?? "").trim();
   const scoreNote = resolved
     ? resolved === "upheld"
       ? noDeliverable
@@ -1119,21 +1284,14 @@ function CoveragePanel({
           <label htmlFor="covJob">Job ID</label>
           <input id="covJob" className="input" value={jobId} onChange={(e) => setJobId(e.target.value)} />
         </div>
-        <div className="field">
-          <label htmlFor="specHash">Spec — IPFS CID</label>
-          <input
-            id="specHash"
-            className="input"
-            value={specHash}
-            onChange={(e) => setSpecHash(e.target.value)}
-            placeholder="Qm… or bafy…"
-          />
-          <p className="hint" style={{ marginTop: 2 }}>
-            The contract never fetches this on the deterministic-breach path, so a
-            shape-valid CID is enough for the demo; a judged claim needs a CID that
-            actually resolves on IPFS.
-          </p>
-        </div>
+        <EvidenceInput
+          id="specUrl"
+          label="Spec — link to the file on GitHub"
+          what="the spec (what the job must deliver)"
+          hint="This is the document validators score the deliverable against."
+          value={spec}
+          onChange={setSpec}
+        />
         <div className="field">
           <label htmlFor="deadline">Deadline (ISO, must be future)</label>
           <input id="deadline" className="input" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
@@ -1237,24 +1395,71 @@ function CoveragePanel({
                       : "—"}
                 </span>
               </div>
+              <div className="pol-cell">
+                <span className="pol-k">Agent bond held</span>
+                <span className="pol-v mono">
+                  {toBig(pol.agent_bond_atto) > 0n
+                    ? `${gen(pol.agent_bond_atto)} GEN`
+                    : "— not posted yet"}
+                </span>
+              </div>
             </div>
 
-            <div className="score-line">
-              <div className="score-track">
-                <span className="score-threshold" />
+            <div className="pol-evidence">
+              <div className="pol-k">Evidence on file</div>
+              <div className="evidence-row">
+                <span className="pol-k">Spec</span>
+                {pol.spec_url ? (
+                  <a
+                    className="mono evidence-link"
+                    href={pol.spec_url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {pol.spec_url} ↗
+                  </a>
+                ) : (
+                  <span className="dim">—</span>
+                )}
               </div>
-              <div className="score-labels">
-                <span>breach below 40</span>
-                <span>conforming</span>
+              {pol.spec_sha256 ? (
+                <div className="evidence-row">
+                  <span className="pol-k">Spec sha256</span>
+                  <span className="mono evidence-hash">{pol.spec_sha256}</span>
+                </div>
+              ) : null}
+              <div className="evidence-row">
+                <span className="pol-k">Deliverable</span>
+                {pol.deliverable_url ? (
+                  <a
+                    className="mono evidence-link"
+                    href={pol.deliverable_url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {pol.deliverable_url} ↗
+                  </a>
+                ) : (
+                  <span className="dim">— nothing submitted</span>
+                )}
               </div>
-              {scoreNote && <p className="score-note">{scoreNote}</p>}
+              {pol.deliverable_sha256 ? (
+                <div className="evidence-row">
+                  <span className="pol-k">Deliverable sha256</span>
+                  <span className="mono evidence-hash">{pol.deliverable_sha256}</span>
+                </div>
+              ) : null}
             </div>
 
             {pol.status === "pending" && isAgentOwner && (
               <div className="pol-act">
                 <p className="hint" style={{ margin: 0 }}>
-                  You registered this agent. Accept to bind the coverage and start the
-                  clock — the buyer&apos;s premium stays escrowed until then.
+                  You registered this agent. Accepting binds the coverage, starts the
+                  clock, and posts a{" "}
+                  <strong>{gen(pol.coverage_atto)} GEN bond</strong> — the same size as
+                  the coverage. The bond is what pays the buyer if you breach; it comes
+                  back in full when you deliver or when the job expires. The buyer&apos;s
+                  premium stays escrowed until you accept.
                 </p>
                 <div className="btn-row" style={{ marginTop: 10 }}>
                   <button
@@ -1262,7 +1467,9 @@ function CoveragePanel({
                     disabled={actN.status === "pending"}
                     onClick={doAccept}
                   >
-                    {actN.status === "pending" ? "Accepting…" : "Accept job"}
+                    {actN.status === "pending"
+                      ? "Posting bond…"
+                      : `Accept job + post ${gen(pol.coverage_atto)} GEN bond`}
                   </button>
                 </div>
                 <Notice n={actN} />
@@ -1319,7 +1526,8 @@ function CoveragePanel({
 function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
   // -- deliverable (agent side)
   const [dJobId, setDJobId] = useState("job-001");
-  const [dHash, setDHash] = useState("");
+  // The delivered work: verified in-browser, then committed as (link, sha256).
+  const [dEvidence, setDEvidence] = useState<Evidence | null>(null);
   const [dN, setDN] = useState<Notice>(idleNotice);
 
   // -- claim (buyer side)
@@ -1336,11 +1544,29 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
   const [vN, setVN] = useState<Notice>(idleNotice);
 
   async function doDeliver() {
+    if (!dEvidence) {
+      setDN({
+        status: "error",
+        title: "Check the deliverable link first",
+        detail:
+          "Paste a link to the delivered file and press “Check this link”. The contract re-opens that exact link and refuses the submission if the bytes no longer match, so an unchecked link would just fail on-chain.",
+      });
+      return;
+    }
     setDN({ status: "pending", title: "Submitting deliverable…" });
     try {
       const addr = await ensureWallet();
-      const { hash } = await submitDeliverable(addr, dJobId, dHash);
-      setDN({ status: "ok", title: "Deliverable recorded", detail: `tx ${hash}` });
+      const { hash } = await submitDeliverable(
+        addr,
+        dJobId,
+        dEvidence.rawUrl,
+        dEvidence.sha256
+      );
+      setDN({
+        status: "ok",
+        title: "Deliverable recorded",
+        detail: `tx ${hash} — the contract re-fetched the file and confirmed the fingerprint matches.`,
+      });
       pushFeed({ action: "deliverable", jobId: dJobId.trim() });
     } catch (e: any) {
       setDN({ status: "error", title: "Submission failed", detail: errText(e) });
@@ -1414,22 +1640,18 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
             </p>
           </div>
         </div>
-        <div className="form-2col">
-          <div className="field">
-            <label htmlFor="dJob">Job ID</label>
-            <input id="dJob" className="input" value={dJobId} onChange={(e) => setDJobId(e.target.value)} />
-          </div>
-          <div className="field">
-            <label htmlFor="dHash">Deliverable — IPFS CID</label>
-            <input
-              id="dHash"
-              className="input"
-              value={dHash}
-              onChange={(e) => setDHash(e.target.value)}
-              placeholder="Qm… or bafy…"
-            />
-          </div>
+        <div className="field">
+          <label htmlFor="dJob">Job ID</label>
+          <input id="dJob" className="input" value={dJobId} onChange={(e) => setDJobId(e.target.value)} />
         </div>
+        <EvidenceInput
+          id="dUrl"
+          label="Deliverable — link to the file on GitHub"
+          what="the work you delivered"
+          hint="The contract opens this link itself before accepting the submission, so a link that does not resolve is rejected on the spot — not later, and not at the buyer's expense."
+          value={dEvidence}
+          onChange={setDEvidence}
+        />
         <div className="btn-row">
           <button className="btn btn-primary" disabled={dN.status === "pending"} onClick={doDeliver}>
             {dN.status === "pending" ? "Submitting…" : "Submit deliverable"}
@@ -1437,8 +1659,9 @@ function ClaimsPanel({ ensureWallet }: { ensureWallet: EnsureWallet }) {
         </div>
         <Notice n={dN} />
         <p className="hint">
-          Must be a real content-addressed CID, not a link — the contract rejects
-          anything else so every validator judges the exact same bytes.
+          The link must point at one exact version of the file (a 40-character commit id),
+          not a branch. Once a claim is filed the link is frozen — it cannot be swapped
+          while validators are judging.
         </p>
       </div>
 
@@ -1711,6 +1934,48 @@ export default function Home() {
       {/* -------------------------------------------- pool tiles removed here
           (the redesign moved pool state into the hero-left PoolBars board;
            Pools tab below still owns the deposit/withdraw workflow) */}
+
+      {/* how evidence works — one plain-language strip so a first-time visitor
+          understands the deliverable model before touching any form. */}
+      <section className="howto" aria-label="How evidence works">
+        <div className="howto-head">
+          <span className="hero-eyebrow">How proof works here</span>
+          <p>
+            A job is judged against <strong>files, not promises</strong>. Both the spec and
+            the delivered work live on GitHub, and the contract locks in an exact
+            fingerprint of each one — so nobody, on either side, can swap what was
+            promised or what was handed over.
+          </p>
+        </div>
+        <ol className="howto-steps">
+          <li>
+            <span className="howto-n">1</span>
+            <div>
+              <strong>Buyer locks the spec.</strong> Paste a GitHub link to the spec. The
+              browser reads the file and shows its size and fingerprint before anything is
+              committed; that exact fingerprint goes on-chain with the policy.
+            </div>
+          </li>
+          <li>
+            <span className="howto-n">2</span>
+            <div>
+              <strong>Agent delivers the same way.</strong> The agent pastes a GitHub link
+              to the finished work. The contract opens the link itself and refuses the
+              submission unless the bytes still match the fingerprint — a dead or doctored
+              link is rejected on the spot, before any claim.
+            </div>
+          </li>
+          <li>
+            <span className="howto-n">3</span>
+            <div>
+              <strong>Validators judge the frozen files.</strong> After the deadline,
+              independent validators re-fetch both files and score conformance. If the work
+              doesn&apos;t match the spec, the agent&apos;s bond — not other people&apos;s
+              capital — pays the buyer.
+            </div>
+          </li>
+        </ol>
+      </section>
 
       {/* ------------------------------------------------------------ tabs */}
       <div className="tabs" role="tablist">

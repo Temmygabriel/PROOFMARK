@@ -2132,6 +2132,172 @@ select.input option {
   padding-top: 12px;
 }
 
+/* ---------------------------------------------------------- evidence (FIX-22)
+   A commit-pinned GitHub link + the sha256 of the exact bytes it serves -- shown
+   wherever a job's evidence is listed, and in the paste-a-link input both the
+   buyer (spec) and the agent (deliverable) use. */
+.pol-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.evidence-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.evidence-hash {
+  font-size: 11px;
+  color: var(--text-dim);
+  word-break: break-all;
+  line-height: 1.45;
+}
+
+.evidence-link {
+  font-size: 11px;
+  color: var(--proof-bright);
+  word-break: break-all;
+  line-height: 1.45;
+}
+
+.dim {
+  color: var(--text-dim);
+}
+
+/* the verified-file card: size + fingerprint + link + optional preview */
+.evidence-box {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 11px 12px;
+  border: 1px solid rgba(59, 142, 255, 0.22);
+  background: rgba(59, 142, 255, 0.05);
+  border-radius: 7px;
+}
+
+.evidence-peek summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.evidence-peek pre {
+  margin: 8px 0 0;
+  padding: 9px 10px;
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+ol.hint {
+  list-style: decimal;
+}
+
+/* ------------------------------------------------- how evidence works strip
+   One plain-language explanation of the commit-pinned GitHub model, shown
+   between the hero and the tabs so a first-time visitor gets it up front. */
+.howto {
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, var(--panel-strong), var(--panel));
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin: 18px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.howto-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.howto-head p {
+  margin: 0;
+  max-width: 78ch;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.howto-head strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.howto-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.howto-steps li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.howto-steps strong {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.howto-n {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--proof-bright);
+  background: var(--proof-bg);
+  border: 1px solid rgba(59, 142, 255, 0.26);
+}
+
+@media (max-width: 760px) {
+  .howto-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .evidence-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
 /* honest conformance line — threshold only, no fake fill */
 .score-line {
   display: flex;

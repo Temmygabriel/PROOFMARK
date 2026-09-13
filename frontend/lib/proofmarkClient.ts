@@ -314,14 +314,15 @@ export async function issuePolicy(
   jobId: string,
   agentId: string,
   coverageAtto: bigint,
-  specHash: string,
+  specUrl: string,
+  specSha256: string,
   deadlineIso: string,
   premiumAtto: bigint
 ) {
   const res = await write(
     account,
     "issue_policy",
-    [jobId, agentId, coverageAtto, specHash, deadlineIso],
+    [jobId, agentId, coverageAtto, specUrl, specSha256, deadlineIso],
     premiumAtto
   );
   // A rejected issue SUCCEEDS on-chain (refund in-call, FIX-21) — read the
@@ -330,21 +331,30 @@ export async function issuePolicy(
   return res;
 }
 
+/** Agent attaches the deliverable evidence: a commit-pinned GitHub URL plus the
+ * sha256 of the exact bytes it serves. The contract fetches the URL live and
+ * refuses the submission outright if the bytes do not hash to `deliverableSha256`
+ * (FIX-22) -- so the agent cannot submit a link that does not resolve, and the
+ * buyer cannot be shown evidence that differs from what was committed. */
 export function submitDeliverable(
   account: GenAccount,
   jobId: string,
-  deliverableHash: string
+  deliverableUrl: string,
+  deliverableSha256: string
 ) {
-  return write(account, "submit_deliverable", [jobId, deliverableHash]);
+  return write(account, "submit_deliverable", [jobId, deliverableUrl, deliverableSha256]);
 }
 
 export function expirePolicy(account: GenAccount, jobId: string) {
   return write(account, "expire_policy", [jobId]);
 }
 
-/** Agent accepts a pending policy, activating it (and starting the clock). */
-export function acceptJob(account: GenAccount, jobId: string) {
-  return write(account, "accept_job", [jobId]);
+/** Agent accepts a pending policy, activating it (and starting the clock).
+ * PAYABLE and must carry at least the coverage as the agent's bond (FIX-22):
+ * the bond — not LP capital — is what pays a breach claim, which is what makes
+ * a self-dealing buyer/agent pair lose money instead of draining the pool. */
+export function acceptJob(account: GenAccount, jobId: string, bondAtto: bigint) {
+  return write(account, "accept_job", [jobId], bondAtto);
 }
 
 /** Agent rejects a pending policy; the buyer's premium is refunded. */
@@ -364,8 +374,12 @@ export function getPolicy(jobId: string) {
     buyer: string;
     agent_id: string;
     coverage_atto: number | bigint;
-    spec_hash: string;
-    deliverable_hash: string;
+    // FIX-22 evidence pair: a commit-pinned GitHub URL + the sha256 of the exact
+    // bytes it serves. Never a CID -- see EVIDENCE_HOST below.
+    spec_url: string;
+    spec_sha256: string;
+    deliverable_url: string;
+    deliverable_sha256: string;
     deadline_iso: string;
     pool_tier: Tier;
     // M-01: the contract also has "pending" (a policy issued but not yet
@@ -373,6 +387,7 @@ export function getPolicy(jobId: string) {
     // contract can actually return.
     status: "pending" | "active" | "claimed" | "expired";
     agent_accepted: boolean;
+    agent_bond_atto: number | bigint;
   }>("get_policy", [jobId]);
 }
 
@@ -437,6 +452,95 @@ export function getClaimStatus(jobId: string) {
     "get_claim_status",
     [jobId]
   );
+}
+
+// ---------------------------------------------------------------------------
+// Evidence — a commit-pinned GitHub file, not an IPFS CID
+// ---------------------------------------------------------------------------
+// The contract accepts evidence ONLY as a permanent raw.githubusercontent.com
+// link that names a full 40-character commit SHA (not a branch), plus the
+// sha256 of the exact bytes it serves. The commit SHA is what makes the link
+// permanent: a branch moves, a commit does not.
+export const EVIDENCE_HOST = "raw.githubusercontent.com";
+
+/** Turns whatever link a user pastes into the raw, commit-pinned form the
+ * contract requires, or throws a plain-language reason. Accepts both the
+ * normal GitHub "blob" page URL and an already-raw URL. */
+export function toRawEvidenceUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) throw new Error("Paste a link to the file first.");
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    throw new Error("That does not look like a link. It should start with https://");
+  }
+  if (u.protocol !== "https:") throw new Error("The link must start with https://");
+  if (u.search || u.hash) {
+    throw new Error("Remove anything after a ? or # — a link to the file itself has neither.");
+  }
+  let rest = "";
+  if (u.hostname === EVIDENCE_HOST) {
+    rest = u.pathname.replace(/^\/+/, "");
+  } else if (u.hostname === "github.com") {
+    // https://github.com/OWNER/REPO/blob/COMMIT/PATH -> raw/OWNER/REPO/COMMIT/PATH
+    const parts = u.pathname.replace(/^\/+/, "").split("/");
+    if (parts[2] === "blob" || parts[2] === "raw") {
+      parts.splice(2, 1);
+      rest = parts.join("/");
+    } else {
+      throw new Error(
+        'Open the file on GitHub first, then copy the link — it should contain "/blob/".'
+      );
+    }
+  } else {
+    throw new Error(
+      `Evidence must be a file on GitHub (${EVIDENCE_HOST}). Other sites cannot be checked.`
+    );
+  }
+  const segs = rest.split("/");
+  const commit = segs[2] ?? "";
+  if (!/^[0-9a-f]{40}$/.test(commit)) {
+    throw new Error(
+      "The link must point at one exact version of the file, not a branch. On GitHub, " +
+        'click "History", open the version you want, then copy the link — it will contain a ' +
+        "40-character commit id."
+    );
+  }
+  if (segs.length < 4 || !segs.slice(3).join("/")) {
+    throw new Error("The link must include the file path, not just the repository.");
+  }
+  return `https://${EVIDENCE_HOST}/${rest}`;
+}
+
+/** Fetches an evidence file in the browser and returns its exact bytes hashed
+ * as sha256 (hex) plus the byte count. raw.githubusercontent.com sends
+ * `Access-Control-Allow-Origin: *`, so this works from the page with no proxy.
+ * What the user previews here is byte-for-byte what the contract will fetch and
+ * hash on-chain — if the two ever differed, the contract refuses the evidence. */
+export async function fetchEvidenceSha256(
+  rawUrl: string
+): Promise<{ sha256: string; bytes: number; preview: string }> {
+  let res: Response;
+  try {
+    res = await fetch(rawUrl, { cache: "no-store" });
+  } catch {
+    throw new Error(
+      "Could not reach that link from your browser. Check it opens in a new tab, then try again."
+    );
+  }
+  if (!res.ok) {
+    throw new Error(
+      `That link returned "not found" (${res.status}). Check the file still exists at that exact commit.`
+    );
+  }
+  const buf = new Uint8Array(await res.arrayBuffer());
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  const sha256 = Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  const preview = new TextDecoder("utf-8", { fatal: false }).decode(buf.slice(0, 400));
+  return { sha256, bytes: buf.byteLength, preview };
 }
 
 // ---------------------------------------------------------------------------
