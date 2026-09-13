@@ -13,45 +13,50 @@ only comments/blanks/docstrings and verifies code-token identity — see the tab
 
 | Network | Address | Verified |
 |---|---|---|
-| **StudioNet** (61999) | **`0x65319a2787BE8a57ee570fD0eB61A69887D91099`** | ✅ **PAYOUT-FIX-20** — full §05 loop register→fund→issue→accept→deadline→**file_claim payout** on-chain; the claim's **two child transfers are clean EthSend credits to the buyer EOA (1.000000 + 2.000000 GEN), FINALIZED, no Execution ERROR** (`e2e/results/demo-payout.log`, 2026-09-08). **56/56** direct tests |
-| **Testnet Bradbury** (4221) | **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** | deploy-only read-verified — **fixed Proofmark, minified build** (2026-09-08, tx `0xfd0b7d92…`); behaviorally identical to StudioNet source (56/56 direct tests + genvm-lint on the build) |
+| **StudioNet** (61999) | **`0x849b576f64ecA308300D278223951E4A88e1B5D4`** | ✅ **FIX-22** — GitHub URL+sha256 evidence, agent bond, throughput caps, 90-day deadline ceiling (deployed 2026-09-12, tx `0x1ea533ada62af64d5e85a4a06033bf481fa9a0b25ef25e9a04ac4529f37e6c69`, validators AGREE; **74/74** direct tests + `genvm-lint` clean) |
+| **Testnet Bradbury** (4221) | **`0xE76AF22aea26A84dB11e87FB946060B02F490217`** | **superseded for the FIX-22 model** — still the PAYOUT-FIX-20 minified build (2026-09-08, tx `0xfd0b7d92…`). Redeploy of the FIX-22 build is pending. |
 
-> **Current artifact (2026-09-08):** `proofmark.py` (`class Proofmark`) with the
-> **PAYOUT-FIX-20** external-value-rail fix plus the Phase-7b hardening (GPT-audit
-> H-02 two-phase-claim fix, evidence custody split, FIX-16 impossible acceptance,
-> FIX-18 forever-pending release). PAYOUT-FIX-20 is a **correctness bug-fix, not a
-> hardening change**: every payee is a plain EOA wallet, so value now leaves over the
-> **external `@gl.evm.contract_interface` (`_EoaPay`) → EthSend** rail instead of the
-> IC-to-IC `PostMessage` rail — an IC-to-IC transfer to an empty address finalized
-> with a child "GenVM Execution ERROR" (value debited from the contract but never
-> credited to the wallet). Six money-out sites converted (overpayment refund, premium
-> refund, LP withdraw, claim payout, claim bond refund, pending-claim bond refund);
-> the payout/refund children of a real claim now finalize as clean EthSend credits.
-> The **56/56 direct suite** (incl. the `…external_ethsend_rail` regression test) and
-> `genvm-lint` are green against the canonical source **and** the minified build.
-> See `docs/PROOFMARK_LIVE_EVIDENCE.md`.
+> **Current artifact (2026-09-12): FIX-22.** Two changes define it.
 >
-> **Rebrand outcome (2026-09-06, superseded):** the rename to `proofmark.py` /
-> `class Proofmark` was a new deploy artifact; the pre-hardening rebranded contract
-> (`0x1c91…`, 37/37 + 10/10 + seeded board) stood as canonical until the hardened
-> re-proof above. The prior Shape B deploy (`0x589472da571Db60151100b153D65a7170367E17D`,
-> StudioNet e2e **37/37** PASS on 2026-09-06) is the **historical pre-rename validation**.
+> **(a) The self-dealing drain is closed by an agent bond.** `accept_job` is now
+> **payable** and requires the agent to post a bond of **at least the coverage**;
+> on an upheld breach that bond — never the tier pool — pays the buyer. A
+> buyer/agent pair under one controller now ends a completed round at
+> `seed + premium` (the pool is made whole: `tier_balance = pool_value + bond −
+> payout = pool_value`), so the round is value-destroying instead of a
+> `+0.94 × coverage` drip. Excess bond is refunded in-call. Covered by
+> `test_self_dealing_round_is_value_destroying`.
 >
-> **Superseded canonical (2026-09-08):** `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6`
-> ran the **pre-fix** code — its "settled payout" debited the pool ledger but never
-> EOA-credited the buyer (the very bug PAYOUT-FIX-20 fixes). Replaced by
-> `0x65319a27…`. Similarly Bradbury `0xA2aA8451…` (pre-fix, minified) is superseded
-> by `0xE76AF22a…`.
+> **(b) Evidence is a commit-pinned GitHub URL + sha256, not an IPFS CID.** The
+> contract accepts only `https://raw.githubusercontent.com/…` links naming a full
+> 40-character commit SHA (never a branch), paired with the sha256 of the exact
+> bytes they serve. `submit_deliverable` re-fetches the URL and refuses the
+> submission unless the bytes hash to the committed digest — so a dead or doctored
+> link fails on the agent's own transaction rather than later on the buyer's claim.
+> Alongside: `MAX_OPEN_POLICIES_PER_BUYER` / `_PER_AGENT` (10 each, FIX-22b), a
+> 90-day `MAX_DEADLINE_HORIZON_SECONDS` (FIX-22c), and `_best_funded_tier_at_or_below`
+> no longer falling through a demoted chronic breacher to `unrated` when no LP
+> funds the penalty pool (FIX-22d).
 >
-> **Bradbury (resolved 2026-09-08):** a fresh deploy of the 72,965 B source is blocked by
-> Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`; largest known-good
-> ~39,869 B). The fixed Proofmark is live on Bradbury from a **minified build**,
-> `intelligent-contracts/proofmark-bradbury.py` (**36,811 B**). The minifier removes only full-line /
-> trailing comments, blank lines and docstrings; every run self-verifies `ast.parse`
-> clean + **code-token identity** with the source, and the build passes `genvm-lint check`
-> and the **56/56 direct tests** — so the deployed bytecode is behaviorally identical to
-> the canonical StudioNet artifact (source sha256 `1b7b1cba2223ff42f5d9628dbc38c9079366807ebe0c6224d3f4201b3eb6356f`). The prior pre-rename
-> Shape A deploy `0x79C15889D5070321176994373C440778a9eC47c1` (2026-09-03) is superseded.
+> **74/74 direct tests** and `genvm-lint check` (22 methods: 9 view, 13 write) are
+> green against the canonical source.
+>
+> **Superseded canonical (2026-09-08):** `0x65319a2787BE8a57ee570fD0eB61A69887D91099`
+> (PAYOUT-FIX-20 external EthSend rail, CID evidence, unbonded `accept_job`) — its
+> pool could be drained by a buyer/agent pair, and its evidence model required an
+> IPFS pin. Before that, `0x850F773BF5Bb2bddB788896152C0a3C7C1C212B6` ran the
+> **pre-fix** code whose "settled payout" debited the pool ledger but never
+> EOA-credited the buyer (the bug PAYOUT-FIX-20 fixed).
+>
+> **Bradbury (resolved 2026-09-08, needs refresh):** a fresh deploy of the source is
+> blocked by Bradbury's per-transaction pubdata cap (`BlockPubdataLimitReached`;
+> largest known-good ~39,869 B), so the Bradbury deployment is a **machine-minified
+> build** (`intelligent-contracts/proofmark-bradbury.py`, generated by
+> `e2e/minify_contract.py`). The minifier removes only full-line / trailing
+> comments, blank lines and docstrings; every run self-verifies `ast.parse` clean +
+> **code-token identity** with the source, and the build passes `genvm-lint check`
+> and the direct suite. The live Bradbury address above still carries the
+> **PAYOUT-FIX-20** build — a FIX-22 minified redeploy is outstanding.
 
 Full evidence, prior deployments, and re-deploy steps live in
 [`docs/PROOFMARK_LIVE_EVIDENCE.md`](../docs/PROOFMARK_LIVE_EVIDENCE.md),

@@ -14,9 +14,9 @@ Fixture roles used throughout:
 Run:  python -m pytest tests/direct/test_proofmark.py -v
 """
 
-import base64
 import hashlib
 import json
+import re
 
 # ---------------------------------------------------------------------------
 # Constants + helpers
@@ -25,58 +25,43 @@ import json
 CLAIM_BOND = 2 * 10**18
 MIN_COVERAGE = 10**16
 
-# FIX-21: the contract now verifies that the bytes a gateway serves hash to the
-# digest the CID itself commits to, so tests must use REAL content-addressed
-# CIDs derived from REAL bodies -- a placeholder "Qm..." string no longer
-# passes _cid_digest, and a mock body that doesn't match its CID is correctly
-# refused rather than judged. cid_v0/cid_v1 register the body they hashed, so
-# mock_cid can serve exactly the committed bytes.
-_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-CID_BODIES = {}
+# FIX-22: evidence is now a commit-pinned GitHub raw URL plus the sha256 of the
+# exact bytes, both committed on-chain. Tests therefore build REAL (url, sha256)
+# pairs from REAL bodies -- a mock that serves different bytes than the digest
+# commits to is correctly refused rather than judged. evidence() registers the
+# body it hashed so mock_evidence can serve exactly the committed bytes.
+EVIDENCE_COMMIT = "a" * 40
+EVIDENCE_BASE = (
+    f"https://raw.githubusercontent.com/proofmark-test/evidence/{EVIDENCE_COMMIT}/"
+)
+EVIDENCE_BODIES = {}
 
 
-def _b58_encode(raw: bytes) -> str:
-    num = int.from_bytes(raw, "big")
-    out = ""
-    while num > 0:
-        num, rem = divmod(num, 58)
-        out = _B58_ALPHABET[rem] + out
-    pad = 0
-    for byte in raw:
-        if byte != 0:
-            break
-        pad += 1
-    return "1" * pad + out
-
-
-def cid_v0(body: bytes) -> str:
-    """Real CIDv0 -- base58btc of the sha2-256 multihash of `body`."""
-    cid = _b58_encode(b"\x12\x20" + hashlib.sha256(body).digest())
-    CID_BODIES[cid] = body
-    return cid
-
-
-def cid_v1(body: bytes) -> str:
-    """Real CIDv1 -- base32 multibase 'b' + 0x01 raw 0x55 + sha2-256 multihash."""
-    raw = b"\x01\x55\x12\x20" + hashlib.sha256(body).digest()
-    cid = "b" + base64.b32encode(raw).decode().lower().rstrip("=")
-    CID_BODIES[cid] = body
-    return cid
+def evidence(path: str, body: bytes):
+    """A (url, sha256) evidence pair for `body`, pinned to a fake commit."""
+    url = EVIDENCE_BASE + path
+    EVIDENCE_BODIES[url] = body
+    return (url, hashlib.sha256(body).hexdigest())
 
 
 SPEC_BODY = b"Deliver a report of at least 500 words covering the three risks."
 DELIV_OK_BODY = b"Report: risk one, risk two, and risk three, each covered in depth."
 DELIV_BAD_BODY = b"TODO: nothing written yet."
 
-SPEC = cid_v0(SPEC_BODY)
-DELIV_OK = cid_v0(DELIV_OK_BODY)
-DELIV_BAD = cid_v0(DELIV_BAD_BODY)
-# A mutable URL -- must be rejected by _canonical_content_hash (FIX-01).
-MUTABLE_URL = "https://gist.github.com/someone/edit"
-# A CID wrapped in whitespace/newlines -- canonicalization must strip (FIX-01 v2).
-WHITESPACE_CID = "   " + DELIV_OK + "\n"
-# A syntactically-valid CIDv1 that exceeds MAX_CID_LEN (FIX-01 v3).
-LONG_CID = "b" + "y" * 80
+SPEC = evidence("spec.txt", SPEC_BODY)
+DELIV_OK = evidence("deliverable.txt", DELIV_OK_BODY)
+DELIV_BAD = evidence("deliverable-bad.txt", DELIV_BAD_BODY)
+# A URL on a host that is NOT the allowlisted evidence host -- must be refused
+# by _canonical_evidence_url (FIX-22): the caller does not get to choose what
+# every validator fetches (SSRF).
+FOREIGN_URL = ("https://gist.github.com/someone/edit", "0" * 64)
+# A commit-pinned URL whose commit segment is a BRANCH name: the bytes could be
+# moved after the fact, so it must be refused.
+BRANCH_URL = (EVIDENCE_BASE.replace(EVIDENCE_COMMIT, "main"), "0" * 64)
+# An evidence URL wrapped in whitespace/newlines -- canonicalization must strip.
+WHITESPACE_URL = ("   " + DELIV_OK[0] + "\n", DELIV_OK[1])
+# An evidence URL past MAX_EVIDENCE_URL_LEN (FIX-22).
+LONG_URL = (EVIDENCE_BASE + "x" * 400, "0" * 64)
 
 T0 = "2026-01-01T00:00:00Z"
 T_PLUS_4 = "2026-01-05T00:00:00Z"
@@ -114,9 +99,13 @@ def deposit(direct_vm, contract, account, tier, amount_atto):
 
 def issue_policy(direct_vm, contract, buyer, job_id, agent_id, coverage_atto,
                  spec, deadline, premium_atto):
+    """`spec` is an (url, sha256) evidence pair -- FIX-22 unpacked here so the
+    ~40 call sites keep passing SPEC/DELIV_OK pairs unchanged."""
+    spec_url, spec_sha256 = spec
     direct_vm.sender = buyer
     direct_vm.value = premium_atto
-    contract.issue_policy(job_id, agent_id, coverage_atto, spec, deadline)
+    contract.issue_policy(job_id, agent_id, coverage_atto, spec_url, spec_sha256,
+                          deadline)
 
 
 def issue_rejected(direct_vm, contract, buyer, job_id, agent_id, coverage_atto,
@@ -132,10 +121,16 @@ def issue_rejected(direct_vm, contract, buyer, job_id, agent_id, coverage_atto,
     return reason
 
 
-def accept(direct_vm, contract, agent_acct, job_id):
+def accept(direct_vm, contract, agent_acct, job_id, bond_atto=None):
     """FIX-02: the insured agent must accept a pending policy before any
-    submit / claim / expire can happen."""
+    submit / claim / expire can happen.
+
+    FIX-22: acceptance is now payable -- the agent posts a bond equal to the
+    policy coverage, so the ~50 call sites that just want an active policy get
+    the exact required bond read off-chain unless a test overrides it."""
+    coverage = int(contract.get_policy(job_id)["coverage_atto"])
     direct_vm.sender = agent_acct
+    direct_vm.value = coverage if bond_atto is None else bond_atto
     contract.accept_job(job_id)
 
 
@@ -148,13 +143,14 @@ def issue_active(direct_vm, contract, buyer, agent_acct, job_id, agent_id,
     accept(direct_vm, contract, agent_acct, job_id)
 
 
-def mock_cid(direct_vm, cid, body=None):
-    """Register a 200 mock for one evidence CID, serving exactly the bytes that
-    CID commits to unless the caller deliberately overrides them (probe at
-    submit + judge fetch at claim both hit the gateway)."""
+def mock_evidence(direct_vm, evidence_pair, body=None):
+    """Register a 200 mock for one evidence URL, serving exactly the bytes that
+    the committed sha256 covers unless the caller deliberately overrides them
+    (probe at submit + judge fetch at claim both hit the host)."""
+    url = evidence_pair[0]
     if body is None:
-        body = CID_BODIES[cid]
-    direct_vm.mock_web(r".*" + cid + r".*", {"status": 200, "body": body})
+        body = EVIDENCE_BODIES[url]
+    direct_vm.mock_web(re.escape(url), {"status": 200, "body": body})
 
 
 def mock_judgement(direct_vm, score, injection=False):
@@ -371,19 +367,30 @@ def test_issue_policy_requires_pool_capital(
     assert contract.get_claim_status("job-1") == "unresolved"
 
 
-def test_issue_policy_rejects_url_and_min_coverage(
+def test_issue_policy_rejects_foreign_host_and_min_coverage(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
     contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
-    # spec_hash must be a CID, not a mutable URL.
+    # FIX-22: the evidence URL must be on the single allowlisted host, so a
+    # caller cannot make every validator fetch an arbitrary address (SSRF).
     issue_rejected(direct_vm, contract, direct_charlie, "job-1", "agent-a",
-                   10**18, MUTABLE_URL, DEADLINE, premium_for(10**18, "unrated"),
-                   "must be a content-addressed")
+                   10**18, FOREIGN_URL, DEADLINE, premium_for(10**18, "unrated"),
+                   "evidence URL must be https://raw.githubusercontent.com/")
+
+    # A branch/tag in the commit slot is mutable -- refused, because the whole
+    # immutability argument rests on that segment being a commit SHA.
+    issue_rejected(direct_vm, contract, direct_charlie, "job-2", "agent-a",
+                   10**18, BRANCH_URL, DEADLINE, premium_for(10**18, "unrated"),
+                   "commit SHA")
+    # ...as is a sha256 that is not 64 hex characters.
+    issue_rejected(direct_vm, contract, direct_charlie, "job-3", "agent-a",
+                   10**18, (SPEC[0], "deadbeef"), DEADLINE,
+                   premium_for(10**18, "unrated"), "sha256 must be 64 hex")
 
     # Coverage below MIN_COVERAGE_ATTO.
-    issue_rejected(direct_vm, contract, direct_charlie, "job-2", "agent-a",
+    issue_rejected(direct_vm, contract, direct_charlie, "job-4", "agent-a",
                    MIN_COVERAGE - 1, SPEC, DEADLINE, 1, "at least")
 
 
@@ -546,21 +553,23 @@ def test_submit_deliverable_access_and_shape(
     # Only the insured agent may submit.
     direct_vm.sender = direct_charlie
     with direct_vm.expect_revert("only the insured agent"):
-        contract.submit_deliverable("job-1", DELIV_OK)
+        contract.submit_deliverable("job-1", *DELIV_OK)
 
-    # Must be a CID, not a URL (rejected before any probe).
+    # Must be a commit-pinned URL on the allowlisted evidence host -- a foreign
+    # host is refused before any probe (FIX-22: the caller does not choose what
+    # every validator fetches).
     direct_vm.sender = direct_bob
-    with direct_vm.expect_revert("must be a content-addressed"):
-        contract.submit_deliverable("job-1", MUTABLE_URL)
+    with direct_vm.expect_revert("no other host is fetchable"):
+        contract.submit_deliverable("job-1", *FOREIGN_URL)
 
     # Agent submits, and can overwrite before the claim is judged. Each submit
-    # live-probes the CID (FIX-01), so both CIDs must resolve before submit.
-    mock_cid(direct_vm, DELIV_BAD)
-    mock_cid(direct_vm, DELIV_OK)
+    # live-probes the URL (FIX-01), so both must resolve before submit.
+    mock_evidence(direct_vm, DELIV_BAD)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_BAD)
-    contract.submit_deliverable("job-1", DELIV_OK)
-    assert contract.get_policy("job-1")["deliverable_hash"] == DELIV_OK
+    contract.submit_deliverable("job-1", *DELIV_BAD)
+    contract.submit_deliverable("job-1", *DELIV_OK)
+    assert contract.get_policy("job-1")["deliverable_url"] == DELIV_OK[0]
 
 
 def test_submit_deliverable_unknown_job(direct_vm, direct_deploy, direct_bob):
@@ -568,7 +577,7 @@ def test_submit_deliverable_unknown_job(direct_vm, direct_deploy, direct_bob):
     register(direct_vm, contract, direct_bob, "agent-a")
     direct_vm.sender = direct_bob
     with direct_vm.expect_revert("unknown job_id"):
-        contract.submit_deliverable("job-nope", DELIV_OK)
+        contract.submit_deliverable("job-nope", *DELIV_OK)
 
 
 # ---------------------------------------------------------------------------
@@ -622,8 +631,10 @@ def test_claim_auto_breach_when_no_deliverable_after_deadline(
     assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
 
     # FIX-21: payout is exactly coverage_atto -- never a shrunken pool-share cap.
+    # FIX-22: it is funded by the agent's bond, so the pool keeps its capital.
     info = contract.get_pool_info("unrated")
-    assert info["balance_atto"] == 20 * 10**18 + prem - coverage
+    assert info["balance_atto"] == 20 * 10**18 + prem
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == 0
 
 
 def test_payouts_leave_over_external_ethsend_rail(
@@ -673,13 +684,13 @@ def test_claim_judged_upheld(direct_vm, direct_deploy, direct_alice, direct_bob,
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    # submit_deliverable live-probes the CID (FIX-01): mock it before submit.
-    mock_cid(direct_vm, DELIV_BAD)
+    # submit_deliverable live-probes the URL (FIX-01): mock it before submit.
+    mock_evidence(direct_vm, DELIV_BAD)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_BAD)
+    contract.submit_deliverable("job-1", *DELIV_BAD)
 
     # Mock the spec fetch + the LLM judgement (Shape B output schema).
-    mock_cid(direct_vm, SPEC)
+    mock_evidence(direct_vm, SPEC)
     mock_judgement(direct_vm, 5)  # score below threshold -> breach
 
     direct_vm.sender = direct_charlie
@@ -691,14 +702,19 @@ def test_claim_judged_upheld(direct_vm, direct_deploy, direct_alice, direct_bob,
     assert contract.get_claim_status("job-1") == "upheld"
     info = contract.get_pool_info("unrated")
     assert info["locked_exposure_atto"] == 0
-    assert info["balance_atto"] == 20 * 10**18 + prem - coverage
+    # FIX-22: the agent's bond equals the coverage, so an upheld breach pays the
+    # buyer the full coverage OUT OF THE BOND and the pool is made whole --
+    # balance is exactly "premium earned", never "premium minus a payout".
+    assert info["balance_atto"] == 20 * 10**18 + prem
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == 0
 
 
 def test_claim_judged_rejected_bond_forfeited(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
-    """Deliverable conforms -> score high -> rejected; buyer's bond goes to
-    the pool (compensates LPs for consensus), exposure released."""
+    """Deliverable conforms -> score high -> rejected; buyer's claim bond goes to
+    the pool (compensates LPs for consensus), the AGENT's bond is returned, and
+    exposure is released (FIX-22: a conforming agent keeps its skin)."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
@@ -707,12 +723,13 @@ def test_claim_judged_rejected_bond_forfeited(
     issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == coverage
 
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)
+    contract.submit_deliverable("job-1", *DELIV_OK)
 
-    mock_cid(direct_vm, SPEC)
+    mock_evidence(direct_vm, SPEC)
     mock_judgement(direct_vm, 95)  # score above threshold -> conforms
 
     direct_vm.sender = direct_charlie
@@ -723,8 +740,10 @@ def test_claim_judged_rejected_bond_forfeited(
     assert contract.get_claim_status("job-1") == "rejected"
     info = contract.get_pool_info("unrated")
     assert info["locked_exposure_atto"] == 0
-    # Premium stays, bond added to pool, coverage not paid out.
+    # Premium stays, the claim bond is added to the pool, coverage not paid out,
+    # and the agent's bond left escrow (returned, not forfeited).
     assert info["balance_atto"] == 20 * 10**18 + prem + CLAIM_BOND
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == 0
 
 
 def test_claim_gate_access_and_bond(
@@ -817,17 +836,21 @@ def test_claim_pays_full_coverage_even_after_pool_shrinks(
     assert contract.get_claim_status("job-1") == "upheld"
 
     # Paid exactly coverage_atto (2 GEN), not the 0.4048 GEN the old cap gave.
+    # FIX-22: that 2 GEN comes out of the agent's 2 GEN bond, so the pool's own
+    # balance is UNCHANGED by the settlement -- the LP capital is never spent.
     info = contract.get_pool_info("unrated")
-    assert info["balance_atto"] == 4048000000000000000 - cov
+    assert info["balance_atto"] == 4048000000000000000
     assert info["locked_exposure_atto"] == cov
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == cov
 
     # The second policy settles at its own full coverage too.
     direct_vm.value = CLAIM_BOND
     contract.file_claim("job-2")
     assert contract.get_claim_status("job-2") == "upheld"
     info = contract.get_pool_info("unrated")
-    assert info["balance_atto"] == 4048000000000000000 - 2 * cov
+    assert info["balance_atto"] == 4048000000000000000
     assert info["locked_exposure_atto"] == 0
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -854,20 +877,25 @@ def test_accounting_reconciles_with_contract_balance(
     assert acc["tier_balance_atto"] == 20 * 10**18 + prem
     assert acc["locked_exposure_atto"] == coverage
     assert acc["pending_claim_bonds_atto"] == 0
-    assert acc["attributed_atto"] == acc["tier_balance_atto"]
+    # FIX-22: the agent's bond is held OUTSIDE the pool but is still contract-
+    # attributed value -- so attributed = pool + bonds, not pool alone.
+    assert acc["agent_bond_escrow_atto"] == coverage
+    assert acc["attributed_atto"] == acc["tier_balance_atto"] + coverage
 
     # A pending claim's bond is held but not yet credited to any pool, so it
     # must show up as an attributed-but-unpooled amount.
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)
+    contract.submit_deliverable("job-1", *DELIV_OK)
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
     contract.file_claim("job-1")
 
     acc = contract.get_accounting("unrated")
     assert acc["pending_claim_bonds_atto"] == CLAIM_BOND
-    assert acc["attributed_atto"] == acc["tier_balance_atto"] + CLAIM_BOND
+    assert acc["attributed_atto"] == (
+        acc["tier_balance_atto"] + CLAIM_BOND + coverage
+    )
     # `contract_balance_atto` is only meaningful on-chain: direct mode does not
     # model native value at the VM level, so self.balance reads 0 here. On the
     # live network it is the explorer-visible balance and the whole point of the
@@ -1012,11 +1040,11 @@ def test_claim_history_updates_profile(
 # Shape B regression tests (SECURITY-CHECK/security-fixes.md)
 # ---------------------------------------------------------------------------
 
-def test_unresolvable_cid_submit_reverts(direct_vm, direct_deploy, direct_alice,
+def test_unresolvable_url_submit_reverts(direct_vm, direct_deploy, direct_alice,
                                          direct_bob, direct_charlie):
-    """C-1 veto: a deliverable CID that does not resolve must fail on the
+    """C-1 veto: a deliverable URL that does not resolve must fail on the
     AGENT's submit transaction (live probe, FIX-01) -- never brick the buyer's
-    later claim with an unjudgeable CID."""
+    later claim with unjudgeable evidence."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
@@ -1026,21 +1054,21 @@ def test_unresolvable_cid_submit_reverts(direct_vm, direct_deploy, direct_alice,
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    # Deterministic 404 for an unpinned CID.
-    direct_vm.mock_web(r".*" + DELIV_BAD + r".*",
+    # Deterministic 404 for a URL that is not retrievable.
+    direct_vm.mock_web(re.escape(DELIV_BAD[0]),
                        {"status": 404, "body": ""})
     direct_vm.sender = direct_bob
     with direct_vm.expect_revert("not retrievable"):
-        contract.submit_deliverable("job-1", DELIV_BAD)
+        contract.submit_deliverable("job-1", *DELIV_BAD)
     # The policy is left untouched -- the buyer can still claim the no-breach
     # path or a later good submission.
-    assert contract.get_policy("job-1")["deliverable_hash"] == ""
+    assert contract.get_policy("job-1")["deliverable_url"] == ""
 
 
 def test_post_probe_unpin_is_breach_not_revert(direct_vm, direct_deploy,
                                                direct_alice, direct_bob,
                                                direct_charlie):
-    """C-1 veto: a CID that was retrievable at submit but 404s at claim time
+    """C-1 veto: a URL that was retrievable at submit but 404s at claim time
     is adjudicated as a BREACH (score 0), not an unjudgeable revert -- so an
     agent cannot unpin after the fact to neutralise a pending claim."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
@@ -1052,15 +1080,15 @@ def test_post_probe_unpin_is_breach_not_revert(direct_vm, direct_deploy,
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    # Submit passes the probe (CID resolves at submit time).
-    mock_cid(direct_vm, DELIV_OK)
+    # Submit passes the probe (the URL resolves at submit time).
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)
+    contract.submit_deliverable("job-1", *DELIV_OK)
 
     # Between submit and claim the content is unpinned -> now 404 at judge.
     direct_vm.clear_mocks()
-    mock_cid(direct_vm, SPEC)
-    direct_vm.mock_web(r".*" + DELIV_OK + r".*", {"status": 404, "body": ""})
+    mock_evidence(direct_vm, SPEC)
+    direct_vm.mock_web(re.escape(DELIV_OK[0]), {"status": 404, "body": ""})
 
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
@@ -1069,15 +1097,15 @@ def test_post_probe_unpin_is_breach_not_revert(direct_vm, direct_deploy,
 
     assert contract.get_claim_status("job-1") == "upheld"
     assert contract.get_pool_info("unrated")["locked_exposure_atto"] == 0
-    # Breach paid out: pool lost the coverage amount.
-    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + prem - coverage
+    # Breach paid out of the agent's bond: the pool keeps its capital (FIX-22).
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + prem
 
 
 def test_deliverable_frozen_after_deadline(direct_vm, direct_deploy,
                                            direct_alice, direct_bob,
                                            direct_charlie):
     """C-1: evidence is frozen at the deadline -- the agent cannot swap in an
-    unretrievable CID once a claim looks likely (FIX-01 Step 3)."""
+    unretrievable URL once a claim looks likely (FIX-01 Step 3)."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
@@ -1090,15 +1118,16 @@ def test_deliverable_frozen_after_deadline(direct_vm, direct_deploy,
     direct_vm.warp(AFTER_DEADLINE)  # 1 day past the deadline
     direct_vm.sender = direct_bob
     with direct_vm.expect_revert("deadline passed -- deliverable is frozen"):
-        contract.submit_deliverable("job-1", DELIV_OK)
+        contract.submit_deliverable("job-1", *DELIV_OK)
 
 
-def test_whitespace_cid_is_canonicalized(direct_vm, direct_deploy,
+def test_whitespace_url_is_canonicalized(direct_vm, direct_deploy,
                                          direct_alice, direct_bob,
                                          direct_charlie):
-    """C-1 variant 2: the fix CANONICALIZES rather than rejecting, so a CID
-    padded with whitespace/newlines is stored stripped -- validating .strip()
-    while storing the raw argument would have corrupted the gateway URL."""
+    """C-1 variant 2 (FIX-22): the fix CANONICALIZES rather than rejecting, so a
+    commit-pinned URL padded with whitespace/newlines is stored stripped --
+    validating .strip() while storing the raw argument would have corrupted the
+    fetched URL (a guaranteed 404, and historically an agent's cheapest veto)."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
@@ -1108,16 +1137,16 @@ def test_whitespace_cid_is_canonicalized(direct_vm, direct_deploy,
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", WHITESPACE_CID)  # "   Qm...\n"
-    assert contract.get_policy("job-1")["deliverable_hash"] == DELIV_OK
+    contract.submit_deliverable("job-1", *WHITESPACE_URL)  # "   https://...\n"
+    assert contract.get_policy("job-1")["deliverable_url"] == DELIV_OK[0]
 
 
-def test_oversized_cid_rejected(direct_vm, direct_deploy, direct_alice,
+def test_oversized_url_rejected(direct_vm, direct_deploy, direct_alice,
                                 direct_bob, direct_charlie):
-    """C-1 variant 3: an unbounded CIDv1 that would 414 the gateway is rejected
-    by the MAX_CID_LEN cap before any fetch."""
+    """C-1 variant 3 (FIX-22): an unbounded URL that would 414 the host is
+    rejected by the MAX_EVIDENCE_URL_LEN cap before any fetch."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
@@ -1128,8 +1157,8 @@ def test_oversized_cid_rejected(direct_vm, direct_deploy, direct_alice,
     accept(direct_vm, contract, direct_bob, "job-1")
 
     direct_vm.sender = direct_bob
-    with direct_vm.expect_revert("CID too long"):
-        contract.submit_deliverable("job-1", LONG_CID)
+    with direct_vm.expect_revert("evidence URL too long"):
+        contract.submit_deliverable("job-1", *LONG_URL)
 
 
 def test_unaccepted_policy_cannot_submit_or_claim(direct_vm, direct_deploy,
@@ -1150,7 +1179,7 @@ def test_unaccepted_policy_cannot_submit_or_claim(direct_vm, direct_deploy,
     # Agent cannot submit against a policy it has not accepted.
     direct_vm.sender = direct_bob
     with direct_vm.expect_revert("policy not active"):
-        contract.submit_deliverable("job-1", DELIV_OK)
+        contract.submit_deliverable("job-1", *DELIV_OK)
 
     # Buyer cannot claim against an unaccepted policy either. file_claim is
     # payable, so this is a reject-and-refund (FIX-21), not a revert -- and the
@@ -1166,8 +1195,16 @@ def test_unaccepted_policy_cannot_submit_or_claim(direct_vm, direct_deploy,
 
     # FIX-16: accepting after the deadline is refused -- an overdue policy
     # can no longer be bound into an instant "no deliverable" auto-breach.
-    with direct_vm.expect_revert("deadline has passed"):
-        accept(direct_vm, contract, direct_bob, "job-1")
+    # accept_job is PAYABLE (FIX-22), so this is a reject-and-refund of the
+    # posted bond (FIX-21), not a revert that would retain it.
+    direct_vm.sender = direct_bob
+    direct_vm.value = coverage
+    contract.accept_job("job-1")
+    reason = contract.get_rejection(addr_str(direct_bob), "job-1")
+    assert "deadline has passed" in reason
+    assert f"refunded {coverage} atto" in reason
+    assert "retained nothing" in reason
+    assert contract.get_policy("job-1")["status"] == "pending"
 
 
 def test_reject_job_releases_and_refunds(direct_vm, direct_deploy, direct_alice,
@@ -1266,10 +1303,10 @@ def test_bronze_requires_breach_rate(direct_vm, direct_deploy, direct_alice,
 
     # job-2 (charlie) and job-3 (owner) conform -> rejected claims (no breach).
     for jid, buyer in (("job-2", direct_charlie), ("job-3", direct_owner)):
-        mock_cid(direct_vm, DELIV_OK)
+        mock_evidence(direct_vm, DELIV_OK)
         direct_vm.sender = direct_bob
-        contract.submit_deliverable(jid, DELIV_OK)
-        mock_cid(direct_vm, SPEC)
+        contract.submit_deliverable(jid, *DELIV_OK)
+        mock_evidence(direct_vm, SPEC)
         mock_judgement(direct_vm, 95)
         direct_vm.sender = buyer
         direct_vm.value = CLAIM_BOND
@@ -1413,11 +1450,11 @@ def test_out_of_range_score_rejected(direct_vm, direct_deploy, direct_alice,
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    mock_cid(direct_vm, DELIV_BAD)
+    mock_evidence(direct_vm, DELIV_BAD)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_BAD)
+    contract.submit_deliverable("job-1", *DELIV_BAD)
 
-    mock_cid(direct_vm, SPEC)
+    mock_evidence(direct_vm, SPEC)
     mock_judgement(direct_vm, 250)  # adversarial echo, not a real grade
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
@@ -1434,8 +1471,8 @@ def test_out_of_range_score_rejected(direct_vm, direct_deploy, direct_alice,
     # Retry with a sane grade settles the same pending claim. (mock_llm keeps
     # the first registration, so clear + re-register everything.)
     direct_vm.clear_mocks()
-    mock_cid(direct_vm, SPEC)
-    mock_cid(direct_vm, DELIV_BAD)
+    mock_evidence(direct_vm, SPEC)
+    mock_evidence(direct_vm, DELIV_BAD)
     mock_judgement(direct_vm, 5)
     contract.judge_claim("job-1")
     assert contract.get_claim_status("job-1") == "upheld"
@@ -1498,12 +1535,12 @@ def test_rate_limit_maps_to_transient(direct_vm, direct_deploy, direct_alice,
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)
+    contract.submit_deliverable("job-1", *DELIV_OK)
 
     # Gateway rate-limits the claim-time fetch of the spec.
-    direct_vm.mock_web(r".*" + SPEC + r".*", {"status": 429, "body": ""})
+    direct_vm.mock_web(re.escape(SPEC[0]), {"status": 429, "body": ""})
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
     contract.file_claim("job-1")  # deterministic file -- succeeds, escrows bond
@@ -1514,15 +1551,15 @@ def test_rate_limit_maps_to_transient(direct_vm, direct_deploy, direct_alice,
     # claim stays pending and is retryable. FIX-21: four gateways are tried, so
     # "every gateway failed" is an outage, not a 404 -- hence the generic
     # "gateway unavailable" transient rather than a gateway-specific status.
-    with direct_vm.expect_revert("evidence gateway unavailable"):
+    with direct_vm.expect_revert("evidence host unavailable"):
         contract.judge_claim("job-1")
     assert contract.get_claim_status("job-1") == "pending"
 
     # Gateway recovers: the same pending claim settles normally. (mock_llm keeps
     # the first registration, so clear + re-register everything.)
     direct_vm.clear_mocks()
-    mock_cid(direct_vm, SPEC)
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, SPEC)
+    mock_evidence(direct_vm, DELIV_OK)
     mock_judgement(direct_vm, 95)  # deliverable conforms
     contract.judge_claim("job-1")
     assert contract.get_claim_status("job-1") == "rejected"
@@ -1544,12 +1581,12 @@ def test_spec_unavailable_at_judge_is_rejected_not_breach(
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)
+    contract.submit_deliverable("job-1", *DELIV_OK)
 
     # The buyer unpins its own spec after the agent already delivered.
-    direct_vm.mock_web(r".*" + SPEC + r".*", {"status": 404, "body": ""})
+    direct_vm.mock_web(re.escape(SPEC[0]), {"status": 404, "body": ""})
 
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
@@ -1578,11 +1615,11 @@ def test_spec_oversized_at_judge_is_rejected(
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)
+    contract.submit_deliverable("job-1", *DELIV_OK)
 
-    direct_vm.mock_web(r".*" + SPEC + r".*",
+    direct_vm.mock_web(re.escape(SPEC[0]),
                        {"status": 200, "body": b"x" * (128 * 1024 + 1)})
 
     direct_vm.sender = direct_charlie
@@ -1638,10 +1675,10 @@ def _judged_policy(direct_vm, contract, buyer, agent_acct, job_id, score=95):
     issue_policy(direct_vm, contract, buyer, job_id, "agent-a",
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, agent_acct, job_id)
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = agent_acct
-    contract.submit_deliverable(job_id, DELIV_OK)
-    mock_cid(direct_vm, SPEC)
+    contract.submit_deliverable(job_id, *DELIV_OK)
+    mock_evidence(direct_vm, SPEC)
     mock_judgement(direct_vm, score)
     direct_vm.sender = buyer
     direct_vm.value = CLAIM_BOND
@@ -1693,7 +1730,7 @@ def test_pending_claim_freezes_deliverable_and_expiry(direct_vm, direct_deploy,
     # Deliverable frozen while pending (even pre-deadline -- a claim is live).
     direct_vm.sender = direct_bob
     with direct_vm.expect_revert("frozen while a claim is pending"):
-        contract.submit_deliverable("job-1", DELIV_OK)
+        contract.submit_deliverable("job-1", *DELIV_OK)
 
     # Expiry blocked while pending -- exposure stays locked for the verdict.
     direct_vm.warp(AFTER_DEADLINE)
@@ -1725,8 +1762,13 @@ def test_permissionless_judge_claim_refunds_bond_to_buyer(direct_vm, direct_depl
 
     assert contract.get_claim_status("job-1") == "upheld"
     assert contract.get_profile("agent-a")["claims_upheld_against"] == 1
-    # Pool lost exactly the coverage; bond refunded to the buyer (not the pool).
-    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + premium_for(10**18, "unrated") - 10**18
+    # FIX-22: coverage is paid out of the forfeited agent bond, so the pool's
+    # balance is the premium and nothing more; the escrowed claim bond is
+    # refunded to the buyer (never to the permissionless caller).
+    assert contract.get_pool_info("unrated")["balance_atto"] == (
+        20 * 10**18 + premium_for(10**18, "unrated")
+    )
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == 0
 
 
 def test_rescind_pending_claim_returns_policy_to_active(direct_vm, direct_deploy,
@@ -1795,7 +1837,7 @@ def test_double_file_claim_blocked_while_pending(direct_vm, direct_deploy,
 #   * failed payable execution + value recovery  -> test_rejected_payable_never_retains_value
 #   * coverage conservation                      -> test_claim_pays_full_coverage_even_after_pool_shrinks
 #   * reputation rollback                        -> test_voided_policies_never_inflate_reputation
-#   * CID-integrity mismatch                     -> test_cid_integrity_mismatch_is_refused_not_judged
+#   * evidence-integrity mismatch                     -> test_evidence_integrity_mismatch_is_refused_not_judged
 #   * oversized / non-text evidence              -> test_non_text_evidence_refused_at_submit
 #   * gateway failure                            -> test_rate_limit_maps_to_transient
 #   * validator disagreement                     -> test_validator_rejects_divergent_leader
@@ -1827,17 +1869,18 @@ def test_rejected_payable_never_retains_value(
     # (i) the live failure's shape: coverage above the single-claim pool cap.
     issue_rejected(direct_vm, contract, direct_charlie, "job-cap", "agent-a",
                    2 * 10**18 + 1, SPEC, DEADLINE, prem, "coverage exceeds")
-    # (ii) unknown agent, (iii) mutable URL spec, (iv) premium below quote,
-    #      (v) self-buy, (vi) impossible calendar date.
+    # (ii) unknown agent, (iii) foreign-host spec URL, (iv) premium below
+    #      quote, (v) self-buy, (vi) impossible calendar date.
     issue_rejected(direct_vm, contract, direct_charlie, "job-unk", "ghost",
                    coverage, SPEC, DEADLINE, prem, "unknown agent")
     issue_rejected(direct_vm, contract, direct_charlie, "job-url", "agent-a",
-                   coverage, MUTABLE_URL, DEADLINE, prem, "not a URL")
+                   coverage, FOREIGN_URL, DEADLINE, prem,
+                   "evidence URL must be https")
     issue_rejected(direct_vm, contract, direct_charlie, "job-cheap", "agent-a",
                    coverage, SPEC, DEADLINE, prem - 1, "premium must be at least")
     direct_vm.sender = direct_bob
     direct_vm.value = prem
-    contract.issue_policy("job-self", "agent-a", coverage, SPEC, DEADLINE)
+    contract.issue_policy("job-self", "agent-a", coverage, SPEC[0], SPEC[1], DEADLINE)
     assert "cannot insure the agent's own job" in contract.get_rejection(
         addr_str(direct_bob), "job-self"
     )
@@ -2011,22 +2054,28 @@ def test_non_text_evidence_refused_at_submit(
     accept(direct_vm, contract, direct_bob, "job-1")
 
     binary = b"\x89PNG\r\n\x1a\n\xff\xfe\x00\x01\x80\x81"
-    binary_cid = cid_v0(binary)
-    mock_cid(direct_vm, binary_cid)
+    # A hash-matching but non-UTF-8 body: the sha256 commits to these exact
+    # bytes, so the failure is "not text", not "wrong bytes".
+    binary_evidence = evidence("deliverable.bin", binary)
+    mock_evidence(direct_vm, binary_evidence)
 
     direct_vm.sender = direct_bob
     with direct_vm.expect_revert("not valid UTF-8 text"):
-        contract.submit_deliverable("job-1", binary_cid)
+        contract.submit_deliverable("job-1", *binary_evidence)
     # Refused here, on the agent's own transaction -- not judged as text later.
-    assert contract.get_policy("job-1")["deliverable_hash"] == ""
+    assert contract.get_policy("job-1")["deliverable_url"] == ""
 
 
-def test_non_text_deliverable_at_judge_is_breach(
+def test_tampered_deliverable_at_judge_is_breach(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
-    """Review item 8, custody split: a deliverable that was text at submit but
-    turned binary at judge time is the AGENT's evidence failing -- a breach, not
-    a silently-truncated judgement and not a claim rejection."""
+    """Review item 8, custody split under FIX-22: the submit commits the sha256
+    of the exact bytes, so a host that later serves something else (repinned,
+    tampered upstream, or a re-pointed URL) is caught by the digest rather than
+    judged as if it were the deliverable. That is the AGENT's evidence failing
+    -- a breach, not a claim rejection. FIX-22 also makes the judge-side
+    non_text branch unreachable in practice (the bytes are pinned), but it is
+    kept as defence in depth."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
@@ -2036,15 +2085,15 @@ def test_non_text_deliverable_at_judge_is_breach(
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)
+    contract.submit_deliverable("job-1", *DELIV_OK)
 
-    # The CID now resolves to non-UTF-8 bytes (repinned or tampered upstream).
+    # The URL now serves bytes that no longer hash to the committed sha256.
     direct_vm.clear_mocks()
-    mock_cid(direct_vm, SPEC)
-    direct_vm.mock_web(r".*" + DELIV_OK + r".*",
-                       {"status": 200, "body": b"\xff\xfe\x00\x01binary"})
+    mock_evidence(direct_vm, SPEC)
+    direct_vm.mock_web(re.escape(DELIV_OK[0]),
+                       {"status": 200, "body": b"swapped after submission"})
 
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
@@ -2055,18 +2104,18 @@ def test_non_text_deliverable_at_judge_is_breach(
     assert contract.get_profile("agent-a")["claims_upheld_against"] == 1
     info = contract.get_pool_info("unrated")
     assert info["locked_exposure_atto"] == 0
-    assert info["balance_atto"] == 20 * 10**18 + prem - coverage
+    assert info["balance_atto"] == 20 * 10**18 + prem
 
 
-def test_cid_integrity_mismatch_is_refused_not_judged(
+def test_evidence_integrity_mismatch_is_refused_not_judged(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
     """Review item 8 (the core of it): a gateway serving HTTP 200 does NOT mean
     the bytes are the evidence. Every fetch is hashed and compared against the
-    digest the CID itself commits to. At submit a mismatch is refused; at judge
+    sha256 committed on-chain. At submit a mismatch is refused; at judge
     time a mismatched DELIVERABLE is the agent's breach and a mismatched SPEC
     fails the buyer's own claim -- so neither party can substitute content
-    behind a CID that is already committed on-chain."""
+    behind a sha256 already committed on-chain."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
     setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
 
@@ -2076,24 +2125,24 @@ def test_cid_integrity_mismatch_is_refused_not_judged(
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-1")
 
-    # --- submit-side: 200 OK but the body does not hash to the CID ----------
-    mock_cid(direct_vm, DELIV_OK, body=b"totally different bytes")
+    # --- submit-side: 200 OK but the body does not hash to the committed sha256 ----------
+    mock_evidence(direct_vm, DELIV_OK, body=b"totally different bytes")
     direct_vm.sender = direct_bob
-    with direct_vm.expect_revert("do not match the CID's own sha2-256 digest"):
-        contract.submit_deliverable("job-1", DELIV_OK)
-    assert contract.get_policy("job-1")["deliverable_hash"] == ""
+    with direct_vm.expect_revert("bytes do not match the sha256 committed"):
+        contract.submit_deliverable("job-1", *DELIV_OK)
+    assert contract.get_policy("job-1")["deliverable_url"] == ""
 
     # --- judge-side: deliverable matched at submit, tampered by judge time --
     # (mock_web keeps the FIRST registration for a URL, so clear before
-    # re-registering the same CID with its correct bytes.)
+    # re-registering the same URL with its correct bytes.)
     direct_vm.clear_mocks()
-    mock_cid(direct_vm, DELIV_OK)  # correct bytes now
+    mock_evidence(direct_vm, DELIV_OK)  # correct bytes now
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)
+    contract.submit_deliverable("job-1", *DELIV_OK)
 
     direct_vm.clear_mocks()
-    mock_cid(direct_vm, SPEC)
-    direct_vm.mock_web(r".*" + DELIV_OK + r".*",
+    mock_evidence(direct_vm, SPEC)
+    direct_vm.mock_web(re.escape(DELIV_OK[0]),
                        {"status": 200, "body": b"tampered after submission"})
 
     direct_vm.sender = direct_charlie
@@ -2102,14 +2151,14 @@ def test_cid_integrity_mismatch_is_refused_not_judged(
     contract.judge_claim("job-1")
     assert contract.get_claim_status("job-1") == "upheld"
     assert contract.get_profile("agent-a")["claims_upheld_against"] == 1
-    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + prem - coverage
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + prem
 
 
-def test_cid_integrity_mismatch_on_buyer_spec_rejects_claim(
+def test_evidence_integrity_mismatch_on_buyer_spec_rejects_claim(
     direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
 ):
     """Review item 8, the buyer's half of the custody split: a SPEC whose bytes
-    no longer hash to the CID committed at issue is the BUYER's own evidence
+    no longer hash to the sha256 committed at issue is the BUYER's own evidence
     failing, so the claim is rejected -- never a manufactured breach against an
     agent whose deliverable resolved and verified cleanly."""
     contract = direct_deploy("intelligent-contracts/proofmark.py")
@@ -2121,13 +2170,13 @@ def test_cid_integrity_mismatch_on_buyer_spec_rejects_claim(
                  coverage, SPEC, DEADLINE, prem)
     accept(direct_vm, contract, direct_bob, "job-s")
 
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-s", DELIV_OK)
+    contract.submit_deliverable("job-s", *DELIV_OK)
 
     direct_vm.clear_mocks()
-    mock_cid(direct_vm, DELIV_OK)
-    direct_vm.mock_web(r".*" + SPEC + r".*", {"status": 200, "body": b"swapped spec"})
+    mock_evidence(direct_vm, DELIV_OK)
+    direct_vm.mock_web(re.escape(SPEC[0]), {"status": 200, "body": b"swapped spec"})
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
     contract.file_claim("job-s")
@@ -2156,9 +2205,9 @@ def test_validator_rejects_divergent_leader(
     accept(direct_vm, contract, direct_bob, "job-1")
 
     direct_vm.clear_validators()
-    mock_cid(direct_vm, DELIV_OK)
+    mock_evidence(direct_vm, DELIV_OK)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_OK)  # captures the probe validator
+    contract.submit_deliverable("job-1", *DELIV_OK)  # captures the probe validator
 
     # Honest leader -> the validator re-derives the same state and agrees.
     assert direct_vm.run_validator(leader_result={"state": "ok"}) is True
@@ -2166,7 +2215,7 @@ def test_validator_rejects_divergent_leader(
     # Leader claims "ok" but the bytes the validator can fetch have changed
     # underneath it -> disagree (forces rotation instead of accepting a lie).
     direct_vm.clear_mocks()
-    mock_cid(direct_vm, DELIV_OK, body=b"swapped after the leader looked")
+    mock_evidence(direct_vm, DELIV_OK, body=b"swapped after the leader looked")
     assert direct_vm.run_validator(leader_result={"state": "ok"}) is False
 
     # A leader that ERRORED is never agreed with.
@@ -2206,14 +2255,14 @@ def test_full_paid_lifecycle_quote_to_payout(
     assert profile["jobs_insured"] == 1
     assert profile["distinct_buyers"] == 1
 
-    # 4. Deliverable submission (CID probed + digest-verified live).
-    mock_cid(direct_vm, DELIV_BAD)
+    # 4. Deliverable submission (commit-pinned URL probed + digest-verified live).
+    mock_evidence(direct_vm, DELIV_BAD)
     direct_vm.sender = direct_bob
-    contract.submit_deliverable("job-1", DELIV_BAD)
-    assert contract.get_policy("job-1")["deliverable_hash"] == DELIV_BAD
+    contract.submit_deliverable("job-1", *DELIV_BAD)
+    assert contract.get_policy("job-1")["deliverable_url"] == DELIV_BAD[0]
 
     # 5. Claim filed -- deterministic phase escrows the bond.
-    mock_cid(direct_vm, SPEC)
+    mock_evidence(direct_vm, SPEC)
     mock_judgement(direct_vm, 5)
     direct_vm.sender = direct_charlie
     direct_vm.value = CLAIM_BOND
@@ -2235,12 +2284,14 @@ def test_full_paid_lifecycle_quote_to_payout(
 
     info = contract.get_pool_info("unrated")
     assert info["locked_exposure_atto"] == 0
-    # pool = seed + premium - coverage; the bond was refunded to the buyer and
-    # never entered the pool, so it is absent from BOTH sides of this identity.
-    assert info["balance_atto"] == 20 * 10**18 + prem - coverage
+    # pool = seed + premium: the coverage payout came out of the agent's
+    # forfeited bond, and the claim bond was refunded to the buyer (never to the
+    # pool), so neither is a term in the pool balance (FIX-22).
+    assert info["balance_atto"] == 20 * 10**18 + prem
 
     acc = contract.get_accounting("unrated")
     assert acc["pending_claim_bonds_atto"] == 0
+    assert acc["agent_bond_escrow_atto"] == 0
     assert acc["attributed_atto"] == acc["tier_balance_atto"]
 
     traces = list(direct_vm._traces)
@@ -2248,3 +2299,214 @@ def test_full_paid_lifecycle_quote_to_payout(
         f"payout did not use the external EthSend rail -- {traces}"
     )
     assert not any("PostMessage" in t for t in traces)
+
+
+# ---------------------------------------------------------------------------
+# FIX-22: agent bond + throughput caps (the self-dealing closure)
+# ---------------------------------------------------------------------------
+
+def test_accept_requires_agent_bond(direct_vm, direct_deploy, direct_alice,
+                                    direct_bob, direct_charlie):
+    """accept_job is payable and the agent must post at least the coverage.
+    FIX-21: an underpayment is rejected-and-refunded, never reverted -- a revert
+    would retain the attached value with no ledger entry."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+
+    # Under-funded: rejected, the attached value refunded, policy still pending.
+    direct_vm.sender = direct_bob
+    direct_vm.value = coverage - 1
+    contract.accept_job("job-1")
+    reason = contract.get_rejection(addr_str(direct_bob), "job-1")
+    assert "agent bond must be at least" in reason
+    assert f"refunded {coverage - 1} atto" in reason
+    assert contract.get_policy("job-1")["status"] == "pending"
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == 0
+
+    # Over-funded: accepted, exactly the coverage escrowed, the excess refunded.
+    direct_vm.sender = direct_bob
+    direct_vm.value = coverage + 12345
+    contract.accept_job("job-1")
+    assert contract.get_policy("job-1")["status"] == "active"
+    assert int(contract.get_policy("job-1")["agent_bond_atto"]) == coverage
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == coverage
+
+
+def test_self_dealing_round_is_value_destroying(direct_vm, direct_deploy,
+                                                direct_alice, direct_bob,
+                                                direct_charlie):
+    """The exploit FIX-22 exists for. One controller runs BOTH sides: it issues a
+    policy to its own agent, never delivers, files the deterministic auto-breach
+    and collects the FULL coverage.
+
+    Before the bond the pool paid that coverage and the claim bond came straight
+    back, so the round netted +0.94 x coverage with no rate limit anywhere -- the
+    pool drained geometrically. Now the payout is drawn from the agent's own
+    forfeited bond: the pool ends EXACTLY whole (seed + premium, LP capital never
+    touched). Collusion is still possible, but it is now value-DESTROYING rather
+    than profitable, which is the honest guarantee -- not that it is impossible."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    seed = 20 * 10**18
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    # direct_charlie (buyer) and direct_bob (owner of agent-a) are the same
+    # attacker in the real exploit; the contract cannot tell, and need not.
+    accept(direct_vm, contract, direct_bob, "job-1")
+
+    direct_vm.warp(AFTER_DEADLINE)
+    direct_vm.sender = direct_charlie
+    direct_vm.value = CLAIM_BOND
+    contract.file_claim("job-1")  # deterministic no-deliverable auto-breach
+    assert contract.get_claim_status("job-1") == "upheld"
+
+    info = contract.get_pool_info("unrated")
+    acc = contract.get_accounting("unrated")
+    # 1. The pool is made whole: it keeps the premium and NOT ONE ATTO of LP
+    #    capital funds the payout, because the coverage came out of the bond.
+    assert info["balance_atto"] == seed + prem
+    assert info["locked_exposure_atto"] == 0
+    # 2. The bond left escrow entirely -- the attacker cannot get it back.
+    assert acc["agent_bond_escrow_atto"] == 0
+    # 3. Nothing is left attributed-but-unpooled: the round is fully settled.
+    assert acc["attributed_atto"] == acc["tier_balance_atto"]
+    # The attacker's own ledger, for the record: -premium (paid at issue),
+    # -coverage (bond posted), +coverage (payout), +CLAIM_BOND (refund) =
+    # -premium. Repeating the round now loses money every time.
+
+
+def test_agent_bond_refunded_on_expiry(direct_vm, direct_deploy, direct_alice,
+                                       direct_bob, direct_charlie):
+    """An ACTIVE policy that lapses -- deadline and claim window both passed with
+    no claim -- releases the agent's bond back to the agent. An honest agent must
+    never lose collateral for a job nobody claimed."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    issue_policy(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+    accept(direct_vm, contract, direct_bob, "job-1")
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == coverage
+
+    direct_vm.warp(PAST_WINDOW)
+    direct_vm.sender = direct_charlie  # the buyer lapses its own policy
+    contract.expire_policy("job-1")
+
+    assert contract.get_policy("job-1")["status"] == "expired"
+    assert contract.get_accounting("unrated")["agent_bond_escrow_atto"] == 0
+    # The premium stays with the pool; the bond is a ledger move, not a pool move.
+    assert contract.get_pool_info("unrated")["balance_atto"] == 20 * 10**18 + prem
+
+
+def test_buyer_open_policy_cap(direct_vm, direct_deploy, direct_alice,
+                               direct_bob, direct_charlie):
+    """FIX-22b: a buyer may hold at most MAX_OPEN_POLICIES_PER_BUYER open
+    policies. Neither the per-policy coverage cap nor the aggregate utilization
+    cap ever bounded the NUMBER of rounds -- which is what the drain needed."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie)
+    direct_vm.warp(T0)
+    deposit(direct_vm, contract, direct_alice, "unrated", 40 * 10**18)
+    register(direct_vm, contract, direct_bob, "agent-a")
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    for i in range(10):
+        issue_policy(direct_vm, contract, direct_charlie, f"job-{i}", "agent-a",
+                     coverage, SPEC, DEADLINE, prem)
+
+    issue_rejected(direct_vm, contract, direct_charlie, "job-over", "agent-a",
+                   coverage, SPEC, DEADLINE, prem, "max 10")
+
+
+def test_agent_open_policy_cap(direct_vm, direct_deploy, direct_alice,
+                               direct_bob, direct_charlie, direct_owner):
+    """FIX-22b: an agent may ACCEPT at most MAX_OPEN_POLICIES_PER_AGENT open
+    policies. The counter moves only on the agent's own consent, so a third party
+    cannot fill an unwilling agent's slots -- and a would-be drainer needs a
+    fresh agent identity per 10 rounds, which is the throughput bound that makes
+    the (now loss-making) round rate-limited too."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
+    direct_vm.warp(T0)
+    deposit(direct_vm, contract, direct_alice, "unrated", 40 * 10**18)
+    register(direct_vm, contract, direct_bob, "agent-a")
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    for i in range(10):
+        issue_policy(direct_vm, contract, direct_charlie, f"job-{i}", "agent-a",
+                     coverage, SPEC, DEADLINE, prem)
+    issue_policy(direct_vm, contract, direct_owner, "job-extra", "agent-a",
+                 coverage, SPEC, DEADLINE, prem)
+
+    for i in range(10):
+        accept(direct_vm, contract, direct_bob, f"job-{i}")
+
+    # The 11th acceptance is refused -- and, being payable, refunded in-call.
+    direct_vm.sender = direct_bob
+    direct_vm.value = coverage
+    contract.accept_job("job-extra")
+    reason = contract.get_rejection(addr_str(direct_bob), "job-extra")
+    assert "max 10" in reason
+    assert f"refunded {coverage} atto" in reason
+    assert contract.get_policy("job-extra")["status"] == "pending"
+
+
+def test_deadline_ceiling_rejected(direct_vm, direct_deploy, direct_alice,
+                                   direct_bob, direct_charlie):
+    """FIX-22c: a deadline has a ceiling as well as a floor. Without one a buyer
+    locks up to the 50% utilization cap of a tier for ~0.06% of the pool in
+    premium, capping every LP's exit and consuming issuance capacity forever."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    setUpPoolAndAgent(direct_vm, contract, direct_alice, direct_bob, direct_charlie)
+
+    coverage = 10**18
+    # 2026-01-01 + 94 days = past the 90-day horizon.
+    issue_rejected(direct_vm, contract, direct_charlie, "job-1", "agent-a",
+                   coverage, SPEC, "2026-04-05T00:00:00Z",
+                   premium_for(coverage, "unrated"), "90 days in the future")
+
+
+def test_penalty_tier_sticks_without_funded_pool(direct_vm, direct_deploy,
+                                                 direct_alice, direct_bob,
+                                                 direct_charlie, direct_owner):
+    """FIX-22d: a demotion must not silently become a promotion. With NO LP
+    capital in the penalty pool, a chronic breacher now STAYS in penalty --
+    issue_policy's pool_value > 0 gate then refuses them outright -- instead of
+    falling through to TIER_UNRATED at exactly the newcomer rate the demotion
+    exists to beat."""
+    contract = direct_deploy("intelligent-contracts/proofmark.py")
+    fund_accounts(direct_vm, direct_alice, direct_bob, direct_charlie, direct_owner)
+    direct_vm.warp(T0)
+    deposit(direct_vm, contract, direct_alice, "unrated", 50 * 10**18)
+    register(direct_vm, contract, direct_bob, "agent-a")
+
+    coverage = 10**18
+    prem = premium_for(coverage, "unrated")
+    for jid, buyer in (("job-1", direct_charlie), ("job-2", direct_owner)):
+        issue_policy(direct_vm, contract, buyer, jid, "agent-a",
+                     coverage, SPEC, DEADLINE, prem)
+        accept(direct_vm, contract, direct_bob, jid)
+
+    direct_vm.warp(AFTER_DEADLINE)
+    for jid, buyer in (("job-1", direct_charlie), ("job-2", direct_owner)):
+        direct_vm.sender = buyer
+        direct_vm.value = CLAIM_BOND
+        contract.file_claim(jid)
+        assert contract.get_claim_status(jid) == "upheld"
+
+    # The penalty pool was never funded, yet the demotion sticks.
+    assert contract.get_pool_info("penalty")["balance_atto"] == 0
+    assert contract.get_profile("agent-a")["tier"] == "penalty"
+    assert contract.quote_premium("agent-a", coverage)["tier"] == "penalty"

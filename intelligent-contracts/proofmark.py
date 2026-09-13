@@ -53,7 +53,7 @@ Gaming-audit hardening (this pass):
 - The deliverable being judged is submitted by the AGENT
   (submit_deliverable, address-bound like everything else here), never
   supplied by the buyer at claim time. The earlier design let a buyer pass
-  an arbitrary deliverable_hash straight into file_claim -- meaning a
+  an arbitrary deliverable reference straight into file_claim -- meaning a
   dishonest buyer could point evidence at unrelated content and manufacture
   a breach verdict against an agent who delivered exactly what was
   promised. This is the same "independently attributable" evidence
@@ -61,11 +61,13 @@ Gaming-audit hardening (this pass):
   most consequential piece of evidence in the contract. If the agent never
   submits anything and the deadline passes, that's an unambiguous breach
   decided deterministically -- no LLM call needed, nothing to game.
-- spec_hash / deliverable_hash must look like a real content-addressed
-  IPFS CID (CIDv0/CIDv1 shape check), not an arbitrary URL. A mutable URL
-  (e.g. an editable Gist) can be changed between the leader's fetch and
-  the validator's independent re-fetch, defeating the "every validator
-  judges the same bytes" guarantee the whole evidence model depends on.
+- spec_url / deliverable_url must be a COMMIT-PINNED GitHub raw URL and
+  must carry the sha256 of the exact bytes, both committed on-chain
+  (FIX-22, see below). A bare mutable URL (an editable Gist, a branch
+  name) can be changed between the leader's fetch and a validator's
+  independent re-fetch, defeating the "every validator judges the same
+  bytes" guarantee the whole evidence model depends on. A full 40-char
+  commit SHA cannot be moved.
 - Tier promotion required only a raw COUNT of insured jobs, with no check
   on who bought them. One agent could quietly control a second wallet,
   issue itself a stream of cheap policies, and buy its way to a "gold"
@@ -117,10 +119,11 @@ Shape B hardening (security-fixes pass, post Shape A):
   (agent) and cancel_pending_policy (buyer) both release the locked exposure
   and refund the premium -- a pending policy is fully reversible, which is
   what makes locking exposure at issuance safe.
-- Deliverable veto closed (FIX-01): CIDs are canonicalized (stripped,
-  length-capped at MAX_CID_LEN) at both issue_policy and submit_deliverable,
-  and submit_deliverable live-probes the CID over the evidence gateway
-  (reachable + under MAX_EVIDENCE_BYTES) so an unresolvable CID reverts on
+- Deliverable veto closed (FIX-01): evidence URLs and digests are
+  canonicalized (stripped, length-capped) at both issue_policy and
+  submit_deliverable, and submit_deliverable live-probes the deliverable URL
+  (host-reachable, under MAX_EVIDENCE_BYTES, and matching the committed
+  sha256) so an unresolvable or tampered deliverable reverts on
   the AGENT's transaction, not on the buyer's later claim. Evidence is frozen
   at the deadline -- the agent cannot swap in garbage the moment a claim
   looks likely. Custody split at judge time: the DELIVERABLE is
@@ -128,13 +131,13 @@ Shape B hardening (security-fixes pass, post Shape A):
   at claim time is a breach, never an unjudgeable revert; the SPEC is
   buyer-controlled and only shape-checked at issue, so a spec that 404s (or
   exceeds the judge-time size cap) resolves REJECTED -- the buyer's own
-  evidence failed, and a buyer who can unpin its own spec must not be able to
-  manufacture a breach against an agent that delivered.
+  evidence failed, and a buyer who can break its own spec link must not be
+  able to manufacture a breach against an agent that delivered.
 - Prompt hardening (FIX-04): spec and deliverable bytes are UNTRUSTED input,
   wrapped in neutralising fences (_fence) with an explicit "injection" flag
   in the output schema; a detected injection attempt rejects the claim.
   Fences raise the cost of injection but do not close the class -- the
-  structural backstop is that the agent accepted the exact spec_hash on-chain
+  structural backstop is that the agent accepted the exact spec_sha256 on-chain
   before any liability. Evidence bodies are size-capped again at judge time
   (FIX-05) in case content grew or truncated after the submission probe.
 - Underwriting ceilings (FIX-03): on top of the per-policy 10% cap, total
@@ -149,7 +152,7 @@ Shape B hardening (security-fixes pass, post Shape A):
   agent).
 - Ungoverned by design (FIX-12): the unused admin field is removed; there is
   no keyholder who can rotate the gateway, move balances, or change verdicts.
-  The single evidence gateway (EVIDENCE_GATEWAY) is an accepted operational
+  The single evidence host (EVIDENCE_HOST) is an accepted operational
   single point of failure -- disclosed in CONTRACT.md, deliberately not
   "fixed" with a mutable key.
 - Claim window (FIX-09): claims are refused 7 days (CLAIM_WINDOW_SECONDS)
@@ -177,22 +180,78 @@ Shape B hardening (security-fixes pass, post Shape A):
   bond). The no-deliverable auto-breach path is fully deterministic and still
   resolves inside file_claim itself.
 
-Known residual (deliberate, disclosed): an auto-breach drip now needs TWO
-separate wallets under one controller that BOTH consent -- the buyer wallet
-and the agent wallet that must accept_job the policy -- then let the
-deadline pass without a deliverable. Their real costs are the premium, the
-~2 GEN bond float, a fresh job_id per round, and -- after FIX-07 -- the
-permanent demotion of the colluding agent's own reputation to the penalty
-tier. The aggregate 50% utilization cap (FIX-03) bounds total extraction per
-tier, and payout is capped at the 10%-of-pool claim share. Closing this fully
-needs agent skin-in-the-game or pool admission -- a v1.1 market-design change
-that would also change the single-buyer demo -- so it is left out on purpose
-and documented here instead of hidden.
+Evidence + economic hardening (FIX-22, this pass):
+- Evidence is now a commit-pinned GitHub raw URL plus the sha256 of the
+  exact bytes, both committed on-chain -- IPFS CIDs are gone. The old
+  design was sound in principle and unusable in practice: every public
+  gateway rate-limited or Cloudflare-blocked the network this was built
+  and demoed from, the CID had to be raw codec (a dag-pb digest is over
+  the wrapper node, not the file, so it can NEVER match the served bytes),
+  and producing one required a native-module toolchain. A
+  raw.githubusercontent.com URL containing a full 40-character commit SHA
+  is immutable by GitHub's own guarantee and is reachable from an ordinary
+  browser -- which is the point: a reviewer can open the exact bytes every
+  validator judged. _fetch_url_verified re-hashes the served body against
+  the on-chain sha256, so the DIGEST, not the host, is what makes the
+  evidence trustworthy.
+- The evidence HOST is allowlisted to exactly raw.githubusercontent.com,
+  https only, checked before storage. With a CID the host was fixed by the
+  contract; with a URL the caller would otherwise choose it, which is an
+  SSRF hole (http://169.254.169.254/..., http://localhost:...) that every
+  validator would faithfully fetch. Allowlisting closes it: the attacker
+  never picks the host. Query strings and fragments are refused, and the
+  URL must name a real file path under a 40-hex commit.
+- AGENT SKIN IN THE GAME -- the root fix for the drain. accept_job is now
+  PAYABLE and the insured agent must post a bond of at least the policy's
+  coverage, held in tier_bond_escrow. On an UPHELD breach the bond is
+  forfeited IN FULL to the tier pool, never to the buyer: a self-dealer IS
+  the buyer, so any buyer share would flow straight back to the attacker.
+  Bond >= coverage means the pool is made whole by the very settlement
+  that pays the claim. The old self-dealing round -- two wallets under one
+  controller, agent accepts, deadline passes with no deliverable, buyer
+  collects the full coverage and gets the claim bond refunded -- now nets
+  MINUS the premium instead of plus 94% of the coverage. Non-breach
+  resolutions (rejected claim, expiry) return the bond to the agent. This
+  is also why file_claim's anti-spam bond was never a deterrent: it is
+  refunded on every upheld claim, so it was pure float for the attacker.
+  Without agent collateral no cap, tenure gate, or reputation rule can
+  make the drain unprofitable.
+- Throughput caps (FIX-22b): a buyer may hold at most
+  MAX_OPEN_POLICIES_PER_BUYER open policies and an agent may accept at most
+  MAX_OPEN_POLICIES_PER_AGENT. The buyer's counter moves at issue_policy
+  (their own choice); the agent's moves only at accept_job (their own
+  consent), so a third party cannot fill an unwilling agent's slots -- that
+  would just be a new griefing vector. Both release on every terminal
+  transition. These bound the NUMBER of rounds, which neither the coverage
+  cap nor the utilization cap ever did.
+- Deadline ceiling (FIX-22c): deadlines now have a MAX as well as a MIN. A
+  buyer could otherwise set a deadline in the year 9999 for a premium of
+  ~0.06% of the pool and lock up to the 50% utilization cap indefinitely,
+  capping every LP's exit and consuming issuance capacity -- a spite vector
+  that cost the attacker almost nothing.
+- The penalty tier is no longer a no-op (FIX-22d).
+  _best_funded_tier_at_or_below used to fall through a demoted chronic
+  breacher to TIER_UNRATED when no LP funded the penalty pool, silently
+  repricing them at exactly the newcomer rate the demotion existed to beat
+  -- doubling the nullification, since fresh wallets are free anyway. An
+  agent earned into TIER_PENALTY now STAYS there, and issue_policy's
+  existing pool_value > 0 gate refuses issuance, so a chronic breacher is
+  genuinely uninsurable until their breach rate recovers -- which it can,
+  because claims_filed_against keeps growing with honest work.
+
+Known residual (deliberate, disclosed): the contract cannot prove a buyer
+and an agent owner are different people. What it can do -- and now does --
+is make collusion unprofitable: the forfeited agent bond is worth at least
+the payout the buyer collects, so a manufactured breach destroys value for
+the pair on every round. What is left is the cost of running the round at
+all (premium plus gas), which is a loss, not an extraction. Tier promotion
+is likewise only cost-raised, not sybil-proof (MIN_TENURE_DAYS_BY_TIER,
+MIN_DISTINCT_BUYERS_BY_TIER): nothing on a blockchain can prove one wallet
+is one person. Both are disclosed here rather than hidden.
 """
 
 from genlayer import *
 from dataclasses import dataclass
-import base64
 import hashlib
 
 ERROR_EXPECTED = "[EXPECTED]"
@@ -238,6 +297,15 @@ STATUS_EXPIRED = "expired"
 CLAIM_BOND_ATTO = 2 * 10**18
 BREACH_THRESHOLD = 40
 SCORE_TOLERANCE = 15
+# FIX-22b: throughput caps. The per-policy coverage cap and the aggregate
+# utilization cap bound the SIZE of a single extraction; nothing bounded the
+# COUNT of rounds. Both counters release on every terminal transition.
+MAX_OPEN_POLICIES_PER_BUYER = 10
+MAX_OPEN_POLICIES_PER_AGENT = 10
+# FIX-22c: a deadline needs a ceiling as well as a floor. Without one a buyer
+# locks up to the 50% utilization cap of a tier for ~0.06% of the pool in
+# premium, capping every LP's exit and consuming issuance capacity forever.
+MAX_DEADLINE_HORIZON_SECONDS = 90 * 24 * 60 * 60  # 90 days
 # FIX-21: one policy's coverage is capped at 10% of the tier pool at issue.
 # This is the ONLY per-claim share, and it is an ISSUE-TIME cap, not a
 # settlement-time one -- _resolve_claim pays coverage_atto in full (the label
@@ -279,39 +347,41 @@ MIN_TENURE_DAYS_BY_TIER = {
     TIER_GOLD: 45,
 }
 
-# Content-addressed evidence gateways, tried in this fixed order (FIX-21).
-# spec_hash / deliverable_hash must resolve to the exact same immutable bytes
-# for every validator; the CID digest check below (_fetch_verified) is what
-# makes a multi-gateway fan-out safe -- a gateway returning the wrong bytes is
-# rejected, not judged. The order is fixed (never shuffled) so every validator
-# walks the same sequence and consensus cannot diverge on gateway choice.
-EVIDENCE_GATEWAYS = (
-    "https://w3s.link/ipfs/",
-    "https://dweb.link/ipfs/",
-    "https://ipfs.io/ipfs/",
-    "https://cloudflare-ipfs.com/ipfs/",
-)
-# Kept for the docstring wording and any single-gateway reference.
-EVIDENCE_GATEWAY = EVIDENCE_GATEWAYS[0]
+# Evidence host allowlist (FIX-22). spec_url / deliverable_url must be an
+# https URL on exactly this host containing a full 40-character commit SHA.
+# Two independent properties, neither sufficient alone:
+#   - COMMIT PINNING makes the bytes immutable -- GitHub guarantees a commit
+#     SHA always resolves to the same tree; a branch or tag name can be moved.
+#   - HOST ALLOWLISTING closes the SSRF hole an arbitrary evidence URL reopens.
+#     With an IPFS CID the host was fixed by the contract; with a URL the
+#     CALLER would choose it, and every validator would faithfully fetch
+#     http://169.254.169.254/... or http://localhost/... . Here the attacker
+#     never picks the host.
+# The on-chain sha256 checked in _fetch_url_verified is the third, decisive
+# guarantee: even a compromised or spoofed host cannot make validators judge
+# bytes the policy never committed to.
+EVIDENCE_HOST = "raw.githubusercontent.com"
+EVIDENCE_URL_PREFIX = "https://" + EVIDENCE_HOST + "/"
 
 # Bounds on user-typed identifiers (FIX-21). job_id / agent_id are stored as
 # TreeMap keys and (for a rejected payable call) copied into a rejection record,
 # so an unbounded string is a storage-growth vector.
 MAX_ID_LEN = 128
 
-# CID multihash prefix for sha2-256: [0x12, 0x20, <32 bytes>].
-_MH_SHA2_256 = b"\x12\x20"
-
-# Evidence CID bounds (FIX-01): CIDs are shape-checked AND length-capped so a
-# 10,000-char "CID" can't slip past and produce a 414. Evidence bodies are
-# capped before prompt construction (FIX-05) so an oversized file can never
-# bloat every validator's LLM call.
-MAX_CID_LEN = 64
+# Evidence bounds (FIX-01/FIX-22): the URL is shape-checked AND length-capped
+# so a 10,000-char "URL" cannot slip past and produce a 414. Evidence bodies
+# are capped before prompt construction (FIX-05) so an oversized file can
+# never bloat every validator's LLM call.
+MAX_EVIDENCE_URL_LEN = 320
+SHA256_HEX_LEN = 64
 MAX_EVIDENCE_BYTES = 128 * 1024  # 128 KB hard cap before prompt construction
 MAX_EVIDENCE_CHARS = 16000  # decoded-character cap; matches the _fence cap (FIX-21)
 
-_B58_ALPHABET = set("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-_B32_ALPHABET = set("abcdefghijklmnopqrstuvwxyz234567")
+_HEX_LOWER = set("0123456789abcdef")
+# GitHub owner/repo names allow alphanumerics, hyphen, underscore, dot.
+_GITHUB_NAME_CHARS = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._"
+)
 
 
 def _iso_date_to_day_number(iso_str: str) -> int:
@@ -363,122 +433,122 @@ def _validate_calendar(iso_str: str) -> None:
         raise ValueError("date/time component out of range")
 
 
-def _canonical_content_hash(value: str) -> str:
-    """Returns the canonical (stripped) CID string or raises. Callers MUST
+def _canonical_evidence_url(value: str) -> str:
+    """Returns the canonical (stripped) evidence URL or raises. Callers MUST
     store the return value, never the raw argument -- validating .strip() while
-    storing the unstripped text puts whitespace into the gateway URL (a
-    guaranteed 404, and historically an agent's cheapest veto). Also length-
-    caps the CID so an unbounded 'CIDv1' cannot produce a 414."""
+    storing the unstripped text puts whitespace into the fetched URL (a
+    guaranteed 404, and historically an agent's cheapest veto).
+
+    Accepted, and ONLY accepted: https://raw.githubusercontent.com/<owner>/
+    <repo>/<full 40-char commit SHA>/<path>. Everything else is refused with a
+    reason that names the offending property (FIX-22):
+      - any other scheme or host is an SSRF vector (the caller would otherwise
+        choose what every validator fetches) -- see EVIDENCE_HOST;
+      - a branch or tag name is mutable, so the bytes could change between the
+        leader's fetch and a validator's re-fetch;
+      - a query string or fragment is an alternate-content selector, not
+        evidence identity.
+    """
     v = value.strip()
-    if len(v) > MAX_CID_LEN:
-        raise gl.vm.UserError(f"{ERROR_EXPECTED} CID too long (max {MAX_CID_LEN} chars)")
-    if len(v) == 46 and v.startswith("Qm") and all(c in _B58_ALPHABET for c in v):
-        return v  # CIDv0
-    if 50 <= len(v) <= MAX_CID_LEN and v[0] == "b" and all(c in _B32_ALPHABET for c in v[1:].lower()):
-        return v  # CIDv1 base32
-    raise gl.vm.UserError(
-        f"{ERROR_EXPECTED} must be a content-addressed IPFS CID, not a URL"
-    )
+    if len(v) > MAX_EVIDENCE_URL_LEN:
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} evidence URL too long (max {MAX_EVIDENCE_URL_LEN} chars)"
+        )
+    if not v.startswith(EVIDENCE_URL_PREFIX):
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} evidence URL must be https://{EVIDENCE_HOST}/"
+            f"<owner>/<repo>/<40-char commit>/<path> — no other host is fetchable"
+        )
+    rest = v[len(EVIDENCE_URL_PREFIX):]
+    if any(c in rest for c in " \t\r\n?#"):
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} evidence URL must not contain whitespace, a query "
+            f"string, or a fragment"
+        )
+    parts = rest.split("/")
+    if len(parts) < 4:
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} evidence URL must be https://{EVIDENCE_HOST}/"
+            f"<owner>/<repo>/<40-char commit>/<path>"
+        )
+    owner, repo, commit = parts[0], parts[1], parts[2]
+    for name, seg in (("owner", owner), ("repo", repo)):
+        if seg == "" or not all(c in _GITHUB_NAME_CHARS for c in seg):
+            raise gl.vm.UserError(f"{ERROR_EXPECTED} evidence URL has an invalid {name} segment")
+    if len(commit) != 40 or not all(c in _HEX_LOWER for c in commit):
+        # The whole immutability argument rests on this one segment. A branch
+        # or tag name here would let a party move the evidence after the fact.
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} evidence URL must pin a full 40-character lowercase "
+            f"commit SHA — a branch or tag name can be moved, a commit cannot"
+        )
+    if not any(seg != "" for seg in parts[3:]):
+        raise gl.vm.UserError(f"{ERROR_EXPECTED} evidence URL must name a file path")
+    return v
 
 
-def _b58_decode(s: str) -> bytes:
-    """Minimal base58btc decoder, used only for CIDv0 payloads."""
-    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    num = 0
-    for ch in s:
-        idx = alphabet.find(ch)
-        if idx < 0:
-            raise ValueError("bad base58 character")
-        num = num * 58 + idx
-    pad = 0
-    for ch in s:
-        if ch == "1":
-            pad += 1
-        else:
-            break
-    body = num.to_bytes((num.bit_length() + 7) // 8, "big") if num > 0 else b""
-    return b"\x00" * pad + body
+def _canonical_sha256(value: str) -> str:
+    """Returns the canonical sha256 hex digest or raises. Lowercased so an
+    upper-case digest is the same commitment, not a different one."""
+    v = value.strip().lower()
+    if len(v) != SHA256_HEX_LEN or not all(c in _HEX_LOWER for c in v):
+        raise gl.vm.UserError(
+            f"{ERROR_EXPECTED} sha256 must be {SHA256_HEX_LEN} hex characters"
+        )
+    return v
 
 
-def _b32_decode(s: str) -> bytes:
-    """Minimal RFC4648 base32 decoder (lowercase, padding optional)."""
-    up = s.upper()
-    return base64.b32decode(up + "=" * ((8 - len(up) % 8) % 8))
-
-
-def _cid_digest(cid: str) -> bytes:
-    """The sha2-256 digest a CID commits to, or ValueError for a form this
-    contract cannot check. CIDv0 = base58btc(0x12 0x20 <32B>); CIDv1 base32
-    ('b') = 0x01 <codec> 0x12 0x20 <32B>, codec dag-pb (0x70) or raw (0x55).
-    A CID committing to any other hash is refused, not trusted (FIX-21)."""
-    if len(cid) == 46 and cid.startswith("Qm"):
-        raw = _b58_decode(cid)
-    else:
-        raw = _b32_decode(cid[1:])  # strip the multibase 'b' prefix
-        if len(raw) < 2 or raw[0] != 1:
-            raise ValueError("unsupported CIDv1")
-        if raw[1] not in (0x70, 0x55):  # dag-pb / raw
-            raise ValueError("unsupported multicodec")
-        raw = raw[2:]
-    if len(raw) != 34 or raw[0:2] != _MH_SHA2_256:
-        raise ValueError("CID is not a sha2-256 multihash")
-    return raw[2:]
-
-
-def _fetch_verified(cid: str) -> dict:
-    """Fetch a CID across the evidence gateways and verify the returned bytes
-    against the digest the CID itself commits to (FIX-21).
+def _fetch_url_verified(url: str, sha256_hex: str) -> dict:
+    """Fetch a commit-pinned evidence URL and verify the served bytes against
+    the sha256 committed on-chain (FIX-22).
 
     Returns exactly one of:
-      {"state": "ok", "text": <str>}  -- >=1 gateway served bytes whose sha256
-                                        equals the CID digest, decoded strictly
-                                        as UTF-8 within both size caps
-      {"state": "not_found"}          -- every gateway answered 4xx
+      {"state": "ok", "text": <str>}  -- the host served bytes whose sha256
+                                        equals the committed digest, decoded
+                                        strictly as UTF-8 within both size caps
+      {"state": "not_found"}          -- the host answered 4xx
       {"state": "integrity"}          -- bytes served, but they do not hash to
-                                        the CID (gateway served different content)
+                                        the committed digest (wrong content, or
+                                        an unreadable commitment)
       {"state": "oversized"}          -- over MAX_EVIDENCE_BYTES / _CHARS
       {"state": "non_text"}           -- not valid UTF-8
-      {"state": "unavailable"}        -- every gateway 5xx / rate-limited / errored
+      {"state": "unavailable"}        -- 5xx / rate-limited / transport error
 
-    Deliberately deterministic: fixed gateway order, no shuffling, no silent
-    truncation or errors='replace' -- every outcome is an explicit state the
-    caller turns into a defined verdict (see _judge_breach's policy table)."""
+    Deliberately deterministic: one URL, no fallback host, no silent truncation
+    and no errors='replace' -- every outcome is an explicit state the caller
+    turns into a defined verdict (see _judge_breach's policy table). The URL is
+    already canonical (host-allowlisted, commit-pinned) by the time it is
+    stored; the digest check here is the second, independent guarantee, so even
+    a compromised or spoofed host cannot make validators judge bytes the policy
+    never committed to."""
     try:
-        want = _cid_digest(cid)
+        want = bytes.fromhex(sha256_hex)
     except ValueError:
-        # A CID we cannot check is not evidence we can trust.
+        # An unreadable commitment is not evidence we can trust.
         return {"state": "integrity"}
-    saw_not_found = False
-    saw_integrity = False
-    for gw in EVIDENCE_GATEWAYS:
-        try:
-            res = gl.nondet.web.get(gw + cid)
-        except Exception:
-            continue
-        status = int(res.status)
-        if status == 429 or status >= 500:
-            continue
-        if status >= 400:
-            saw_not_found = True
-            continue
-        body = res.body or b""
-        if len(body) > MAX_EVIDENCE_BYTES:
-            return {"state": "oversized"}
-        if hashlib.sha256(body).digest() != want:
-            saw_integrity = True
-            continue
-        try:
-            text = body.decode("utf-8")  # strict: never silently replaced
-        except UnicodeDecodeError:
-            return {"state": "non_text"}
-        if len(text) > MAX_EVIDENCE_CHARS:
-            return {"state": "oversized"}
-        return {"state": "ok", "text": text}
-    if saw_integrity:
+    if len(want) != 32:
         return {"state": "integrity"}
-    if saw_not_found:
+    try:
+        res = gl.nondet.web.get(url)
+    except Exception:
+        return {"state": "unavailable"}
+    status = int(res.status)
+    if status == 429 or status >= 500:
+        return {"state": "unavailable"}
+    if status >= 400:
         return {"state": "not_found"}
-    return {"state": "unavailable"}
+    body = res.body or b""
+    if len(body) > MAX_EVIDENCE_BYTES:
+        return {"state": "oversized"}
+    if hashlib.sha256(body).digest() != want:
+        return {"state": "integrity"}
+    try:
+        text = body.decode("utf-8")  # strict: never silently replaced
+    except UnicodeDecodeError:
+        return {"state": "non_text"}
+    if len(text) > MAX_EVIDENCE_CHARS:
+        return {"state": "oversized"}
+    return {"state": "ok", "text": text}
 
 
 def _iso_to_epoch_seconds(iso_str: str) -> int:
@@ -593,12 +663,15 @@ class Policy:
     agent_id: str          # canonical (normalized) key, safe to reuse in lookups
     display_job_id: str    # as-typed at issuance -- never used as a key
     coverage_atto: u256
-    spec_hash: str
-    deliverable_hash: str  # "" until the agent submits one -- see submit_deliverable
+    spec_url: str          # commit-pinned GitHub raw URL (FIX-22)
+    spec_sha256: str       # sha256 of the exact spec bytes committed to on-chain
+    deliverable_url: str   # "" until the agent submits one -- see submit_deliverable
+    deliverable_sha256: str
     deadline_iso: str
     pool_tier: str
     status: str
     agent_accepted: bool   # False until the insured agent calls accept_job (FIX-02)
+    agent_bond_atto: u256  # FIX-22: posted at accept_job; forfeited on upheld breach
 
 
 @gl.evm.contract_interface
@@ -633,6 +706,18 @@ class Proofmark(gl.Contract):
     tier_shares: TreeMap[str, u256]          # tier -> total LP shares
     tier_locked_exposure: TreeMap[str, u256]  # tier -> sum of coverage_atto still live
     lp_shares: TreeMap[str, u256]            # "{tier}:{normalized address}" -> shares
+
+    # FIX-22: agent bonds posted at accept_job, held (not credited to the pool)
+    # until the policy resolves -- forfeited to the pool on an upheld breach,
+    # returned to the agent on a rejected claim or an expiry.
+    tier_bond_escrow: TreeMap[str, u256]     # tier -> sum of live agent bonds held
+    # FIX-22b: open-policy counters behind the throughput caps. The buyer's
+    # counter moves at issue_policy (their own choice); the agent's only at
+    # accept_job (their own consent), so a third party cannot consume an
+    # unwilling agent's slots. Both release via _close_policy on every
+    # terminal transition.
+    buyer_open_count: TreeMap[str, u256]     # normalized buyer address -> open policies
+    agent_open_count: TreeMap[str, u256]     # agent_id key -> accepted, unresolved policies
 
     agent_distinct_buyers: TreeMap[str, u256]  # agent_id -> count of distinct buyer addresses
     agent_buyer_seen: TreeMap[str, bool]       # "{agent_id}:{buyer address}" -> True once seen
@@ -708,16 +793,18 @@ class Proofmark(gl.Contract):
             if policy is not None and policy.pool_tier == tier:
                 # Escrowed claim bonds are held, not yet credited to the pool.
                 pending += int(self.pending_claims[key])
+        bonds = int(self.tier_bond_escrow[tier]) if tier in self.tier_bond_escrow else 0
         return {
             "tier": tier,
             "tier_balance_atto": pool,
             "pending_claim_bonds_atto": pending,
+            "agent_bond_escrow_atto": bonds,
             "locked_exposure_atto": int(self.tier_locked_exposure[tier])
             if tier in self.tier_locked_exposure
             else 0,
             "total_shares": int(self.tier_shares[tier]) if tier in self.tier_shares else 0,
             "contract_balance_atto": int(self.balance),
-            "attributed_atto": pool + pending,
+            "attributed_atto": pool + pending + bonds,
         }
 
     @gl.public.write
@@ -758,6 +845,17 @@ class Proofmark(gl.Contract):
             bal = int(self.tier_balance[tier]) if tier in self.tier_balance else 0
             if bal > 0:
                 return tier
+        if earned == TIER_PENALTY:
+            # FIX-22d: do NOT fall through a demoted chronic breacher to
+            # TIER_UNRATED just because no LP funds the penalty pool. That
+            # silently repriced them at exactly the newcomer rate the demotion
+            # exists to beat, making FIX-07 a no-op on top of fresh identities
+            # being free. Staying in TIER_PENALTY lets issue_policy's existing
+            # pool_value > 0 gate refuse issuance instead: a chronic breacher
+            # is genuinely uninsurable until their breach rate recovers --
+            # which it can, because claims_filed_against keeps growing with
+            # honest work.
+            return TIER_PENALTY
         return TIER_UNRATED  # always safe to return to, even if empty (issue_policy gates on pool)
 
     def _recompute_tier(self, agent_id_key: str) -> None:
@@ -848,7 +946,8 @@ class Proofmark(gl.Contract):
         job_id: str,
         agent_id: str,
         coverage_atto: u256,
-        spec_hash: str,
+        spec_url: str,
+        spec_sha256: str,
         deadline_iso: str,
         expected_tier: str = "",  # optional: buyer pins the tier they quoted against (FIX-14)
     ) -> None:
@@ -882,14 +981,10 @@ class Proofmark(gl.Contract):
                 f"{ERROR_EXPECTED} the agent's owner cannot insure the agent's own job", job_key
             )
         try:
-            spec_hash = _canonical_content_hash(spec_hash)  # validates, strips (FIX-01)
-            _cid_digest(spec_hash)  # must decode to a real sha2-256 multihash (FIX-21)
+            spec_url = _canonical_evidence_url(spec_url)  # host + commit-pin + shape (FIX-22)
+            spec_sha256 = _canonical_sha256(spec_sha256)  # the bytes' on-chain commitment
         except gl.vm.UserError as e:
             return self._reject_payable(e.message if hasattr(e, "message") else str(e), job_key)
-        except ValueError:
-            return self._reject_payable(
-                f"{ERROR_EXPECTED} spec_hash is not a decodable sha2-256 IPFS CID", job_key
-            )
         if int(coverage_atto) <= 0:
             return self._reject_payable(f"{ERROR_EXPECTED} coverage_atto must be > 0", job_key)
         if int(coverage_atto) < MIN_COVERAGE_ATTO:
@@ -915,6 +1010,18 @@ class Proofmark(gl.Contract):
             return self._reject_payable(
                 f"{ERROR_EXPECTED} deadline must be at least "
                 f"{MIN_DEADLINE_HORIZON_SECONDS} seconds in the future",
+                job_key,
+            )
+        if deadline_s - now_s > MAX_DEADLINE_HORIZON_SECONDS:
+            # FIX-22c: a deadline with no ceiling lets a buyer lock up to the
+            # 50% utilization cap of a tier for ~0.06% of the pool in premium
+            # and hold it indefinitely -- capping every LP's exit (withdraw's
+            # locked-exposure floor) and consuming issuance capacity. The
+            # premium is donated to the pool being griefed, so this is cheap
+            # spite, not profit, which is exactly why it needed a rule.
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} deadline must be no more than "
+                f"{MAX_DEADLINE_HORIZON_SECONDS // 86400} days in the future",
                 job_key,
             )
 
@@ -979,6 +1086,22 @@ class Proofmark(gl.Contract):
                 f"{ERROR_EXPECTED} premium must be at least {premium_atto} atto", job_key
             )
 
+        buyer_key = _normalize_key(str(gl.message.sender_address))
+        open_before = (
+            int(self.buyer_open_count[buyer_key]) if buyer_key in self.buyer_open_count else 0
+        )
+        if open_before >= MAX_OPEN_POLICIES_PER_BUYER:
+            # FIX-22b: bound the NUMBER of rounds, which neither the per-policy
+            # coverage cap nor the aggregate utilization cap ever did. The
+            # buyer's counter moves here, at their own choice -- the agent's
+            # moves only at accept_job, so this cannot be used to fill an
+            # unwilling agent's slots.
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} too many open policies for this buyer "
+                f"(max {MAX_OPEN_POLICIES_PER_BUYER}) — resolve or cancel one first",
+                job_key,
+            )
+
         self.tier_balance[tier] = u256(pool_value + premium_atto)
         if paid > premium_atto:
             _EoaPay(gl.message.sender_address).emit_transfer(
@@ -995,13 +1118,17 @@ class Proofmark(gl.Contract):
             agent_id=agent_key,
             display_job_id=job_id.strip(),
             coverage_atto=coverage_atto,
-            spec_hash=spec_hash,
-            deliverable_hash="",
+            spec_url=spec_url,
+            spec_sha256=spec_sha256,
+            deliverable_url="",
+            deliverable_sha256="",
             deadline_iso=deadline_iso,
             pool_tier=tier,
             status=STATUS_PENDING,
             agent_accepted=False,
+            agent_bond_atto=u256(0),  # posted at accept_job (FIX-22)
         )
+        self.buyer_open_count[buyer_key] = u256(open_before + 1)
         # FIX-21 (review item 7): reputation counters move to accept_job. A
         # PENDING policy that the agent rejects, the buyer cancels, or anyone
         # expires must not leave a permanent jobs_insured / distinct-buyer
@@ -1016,22 +1143,35 @@ class Proofmark(gl.Contract):
         if key in self.payable_rejections:
             del self.payable_rejections[key]
 
-    @gl.public.write
+    @gl.public.write.payable
     def accept_job(self, job_id: str) -> None:
         """The insured agent must explicitly accept a policy before it becomes
-        active (FIX-02). Without this, any wallet could bind an agent to
-        arbitrary liability on a job the agent never agreed to, let the
-        deadline pass, and collect the auto-breach payout. A pending policy
-        carries no claim/submit rights -- it only reserves exposure, which the
-        agent can always release via reject_job."""
+        active (FIX-02) and must post an AGENT BOND of at least that policy's
+        coverage (FIX-22).
+
+        FIX-02 stops any wallet binding an agent to liability on a job the
+        agent never agreed to. The bond is the other half and the root fix for
+        the pool drain: with no collateral an agent lost only a counter on an
+        upheld breach, so a buyer and an agent owner under one controller could
+        manufacture a default, collect the FULL coverage, have the claim bond
+        refunded, and repeat -- extracting ~94% of the coverage per round with
+        no rate limit anywhere. The bond is forfeited IN FULL to the tier pool
+        on an upheld breach and returned to the agent on a rejected claim or an
+        expiry, so that manufactured round now nets minus the premium.
+
+        PAYABLE, so every failure below is a REJECTION that refunds the whole
+        attached value inside the same transaction (FIX-21) rather than
+        reverting and retaining it."""
         job_key = _normalize_key(job_id)
         if job_key not in self.policies:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown job_id")
+            return self._reject_payable(f"{ERROR_EXPECTED} unknown job_id", job_key)
         policy = self.policies[job_key]
         if policy.status != STATUS_PENDING:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not in pending state")
+            return self._reject_payable(f"{ERROR_EXPECTED} policy not in pending state", job_key)
         if gl.message.sender_address != self.agents[policy.agent_id].owner:
-            raise gl.vm.UserError(f"{ERROR_EXPECTED} only the insured agent may accept")
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} only the insured agent may accept", job_key
+            )
         if _iso_to_epoch_seconds(gl.message_raw["datetime"]) > _iso_to_epoch_seconds(policy.deadline_iso):
             # FIX-16: accepting after the deadline binds the agent to an
             # already-impossible delivery -- the buyer could then file the
@@ -1039,11 +1179,51 @@ class Proofmark(gl.Contract):
             # policy is voided by the buyer (cancel) or, past the claim
             # window, permissionlessly (expire_pending_policy); it is never
             # accepted into liability.
-            raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} deadline has passed -- an overdue policy cannot be accepted"
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} deadline has passed -- an overdue policy cannot be accepted",
+                job_key,
             )
+
+        agent_key = policy.agent_id
+        open_before = (
+            int(self.agent_open_count[agent_key]) if agent_key in self.agent_open_count else 0
+        )
+        if open_before >= MAX_OPEN_POLICIES_PER_AGENT:
+            # FIX-22b: the agent's counter moves only here, on its own consent
+            # -- a third party issuing policies cannot consume these slots.
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} too many open policies for this agent "
+                f"(max {MAX_OPEN_POLICIES_PER_AGENT}) — resolve or reject one first",
+                job_key,
+            )
+
+        required_bond = int(policy.coverage_atto)
+        paid = int(gl.message.value)
+        if paid < required_bond:
+            # Bond >= coverage is what makes collusion value-destroying: the
+            # forfeit on an upheld breach is worth at least the payout the
+            # buyer collects.
+            return self._reject_payable(
+                f"{ERROR_EXPECTED} agent bond must be at least the policy coverage "
+                f"({required_bond} atto)",
+                job_key,
+            )
+
+        tier = policy.pool_tier
+        escrow_before = int(self.tier_bond_escrow[tier]) if tier in self.tier_bond_escrow else 0
+        self.tier_bond_escrow[tier] = u256(escrow_before + required_bond)
+        policy.agent_bond_atto = u256(required_bond)
+        if paid > required_bond:
+            _EoaPay(gl.message.sender_address).emit_transfer(
+                value=u256(paid - required_bond)
+                # External (EthSend) rail: any excess bond returns to the
+                # agent's EOA. External messages execute only on finality, so
+                # state commits before the transfer runs.
+            )
+
         policy.status = STATUS_ACTIVE
         policy.agent_accepted = True
+        self.agent_open_count[agent_key] = u256(open_before + 1)
 
         # FIX-21 (review item 7): the reputation credit lands here, on the
         # agent's own acceptance, not at issue. jobs_insured and
@@ -1054,7 +1234,6 @@ class Proofmark(gl.Contract):
         # counts permanently inflated when the agent rejected, the buyer
         # cancelled, or the policy expired. Acceptance is the first moment the
         # agent is genuinely bound, so it is the honest place to count.
-        agent_key = policy.agent_id
         profile = self.agents[agent_key]
         profile.jobs_insured = u256(int(profile.jobs_insured) + 1)
 
@@ -1088,6 +1267,7 @@ class Proofmark(gl.Contract):
         policy.status = STATUS_EXPIRED
         self._release_exposure(policy.pool_tier, int(policy.coverage_atto))
         self._refund_premium(policy)
+        self._close_policy(policy)
 
     @gl.public.write
     def cancel_pending_policy(self, job_id: str) -> None:
@@ -1105,6 +1285,7 @@ class Proofmark(gl.Contract):
         policy.status = STATUS_EXPIRED
         self._release_exposure(policy.pool_tier, int(policy.coverage_atto))
         self._refund_premium(policy)
+        self._close_policy(policy)
 
     @gl.public.write
     def expire_pending_policy(self, job_id: str) -> None:
@@ -1129,6 +1310,7 @@ class Proofmark(gl.Contract):
         policy.status = STATUS_EXPIRED
         self._release_exposure(policy.pool_tier, int(policy.coverage_atto))
         self._refund_premium(policy)
+        self._close_policy(policy)
 
     def _refund_premium(self, policy) -> None:
         """Return the buyer's premium to their wallet and take it out of the
@@ -1145,22 +1327,17 @@ class Proofmark(gl.Contract):
             # transfer executes -- classic EVM reentrancy cannot occur here.
         )
 
-    def _probe_evidence(self, cid: str) -> str:
-        """Consensus-checked evidence probe (FIX-01, FIX-21). Returns exactly
-        one of _fetch_verified's states -- ok / not_found / integrity /
+    def _probe_evidence(self, url: str, sha256_hex: str) -> str:
+        """Consensus-checked evidence probe (FIX-01, FIX-22). Returns exactly
+        one of _fetch_url_verified's states -- ok / not_found / integrity /
         oversized / non_text / unavailable -- and NEVER reverts on its own.
 
         It deliberately does not revert: callers on a payable path must turn a
         bad state into a refund, because a reverted payable call retains the
         attached value. It also returns a STATE rather than the fetched text so
-        validators compare one small deterministic token, never a payload.
-
-        This replaces the pre-FIX-21 shape, which fetched from a single gateway
-        and let a 4xx through as "the bytes are fine"; nothing checked the
-        served bytes against the CID's own digest, and an oversized file was
-        rejected while a wrong-content file was silently judged."""
+        validators compare one small deterministic token, never a payload."""
         def leader_fn() -> dict:
-            return _fetch_verified(cid)
+            return _fetch_url_verified(url, sha256_hex)
 
         def validator_fn(leaders_res: gl.vm.Result) -> bool:
             if not isinstance(leaders_res, gl.vm.Return):
@@ -1177,20 +1354,23 @@ class Proofmark(gl.Contract):
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
         return str(result.get("state", "unavailable"))
 
-    def _probe_or_reason(self, cid: str, label: str) -> str:
+    def _probe_or_reason(self, url: str, sha256_hex: str, label: str) -> str:
         """Probe and translate a non-ok state into an [EXPECTED]/[TRANSIENT]
         reason string. Returns "" when the evidence is ok."""
-        state = self._probe_evidence(cid)
+        state = self._probe_evidence(url, sha256_hex)
         if state == "ok":
             return ""
         if state == "unavailable":
-            return f"{ERROR_TRANSIENT} evidence gateway unavailable while checking {label}"
+            return f"{ERROR_TRANSIENT} evidence host unavailable while checking {label}"
         if state == "not_found":
-            return f"{ERROR_EXPECTED} {label} CID is not retrievable from any evidence gateway"
+            return (
+                f"{ERROR_EXPECTED} {label} URL is not retrievable — check the "
+                f"commit-pinned link is public and the commit exists"
+            )
         if state == "integrity":
             return (
-                f"{ERROR_EXPECTED} {label} bytes do not match the CID's own sha2-256 "
-                f"digest — refused rather than judged"
+                f"{ERROR_EXPECTED} {label} bytes do not match the sha256 committed "
+                f"on-chain — refused rather than judged"
             )
         if state == "non_text":
             return f"{ERROR_EXPECTED} {label} is not valid UTF-8 text"
@@ -1202,15 +1382,17 @@ class Proofmark(gl.Contract):
         return f"{ERROR_EXPECTED} {label} could not be verified"
 
     @gl.public.write
-    def submit_deliverable(self, job_id: str, deliverable_hash: str) -> None:
+    def submit_deliverable(
+        self, job_id: str, deliverable_url: str, deliverable_sha256: str
+    ) -> None:
         """Only the insured agent can attach the evidence a claim will be
         judged against -- a buyer can never supply this themselves (see module
         docstring). Evidence is frozen at the deadline: after it passes the
-        agent can no longer swap in an unretrievable CID to neutralise a
-        pending claim, and the CID is probed live -- across every gateway, with
-        the served bytes checked against the digest the CID itself commits to
-        (FIX-21) -- so an unresolvable, non-text, oversized, or tampered CID
-        reverts HERE, on the agent's transaction, not on the buyer's claim."""
+        agent can no longer swap in an unretrievable URL to neutralise a
+        pending claim, and the URL is probed live -- the served bytes are
+        checked against the sha256 committed right here (FIX-22) -- so an
+        unresolvable, non-text, oversized, or tampered deliverable reverts
+        HERE, on the agent's transaction, not later on the buyer's claim."""
         job_key = _normalize_key(job_id)
         if job_key not in self.policies:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} unknown job_id")
@@ -1220,7 +1402,7 @@ class Proofmark(gl.Contract):
             raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not active")
         if job_key in self.pending_claims:
             # Evidence must be stable from the moment a claim is filed until it
-            # resolves -- otherwise the agent could swap the CID mid-judgement
+            # resolves -- otherwise the agent could swap the URL mid-judgement
             # (FIX-19 / H-02). Two-phase claims make this window explicit.
             raise gl.vm.UserError(
                 f"{ERROR_EXPECTED} deliverable frozen while a claim is pending"
@@ -1238,21 +1420,18 @@ class Proofmark(gl.Contract):
             )
 
         try:
-            cid = _canonical_content_hash(deliverable_hash)  # validates + strips
-            _cid_digest(cid)  # must decode to a real sha2-256 multihash (FIX-21)
+            deliverable_url = _canonical_evidence_url(deliverable_url)  # FIX-22
+            deliverable_sha256 = _canonical_sha256(deliverable_sha256)
         except gl.vm.UserError as e:
             raise gl.vm.UserError(e.message if hasattr(e, "message") else str(e))
-        except ValueError:
-            raise gl.vm.UserError(
-                f"{ERROR_EXPECTED} deliverable_hash is not a decodable sha2-256 IPFS CID"
-            )
-        # Live reachability + size + CID-integrity check. This call is
-        # deliberately NOT payable, so reverting here is value-safe: it fails
-        # on the AGENT's own transaction and leaves nothing behind.
-        reason = self._probe_or_reason(cid, "deliverable")
+        # Live reachability + size + digest check. This call is deliberately NOT
+        # payable, so reverting here is value-safe: it fails on the AGENT's own
+        # transaction and leaves nothing behind.
+        reason = self._probe_or_reason(deliverable_url, deliverable_sha256, "deliverable")
         if reason != "":
             raise gl.vm.UserError(reason)
-        policy.deliverable_hash = cid  # store canonical form only
+        policy.deliverable_url = deliverable_url  # store canonical form only
+        policy.deliverable_sha256 = deliverable_sha256
 
     @gl.public.write
     def expire_policy(self, job_id: str) -> None:
@@ -1291,10 +1470,52 @@ class Proofmark(gl.Contract):
                 )
         policy.status = STATUS_EXPIRED
         self._release_exposure(policy.pool_tier, int(policy.coverage_atto))
+        self._close_policy(policy)
+        # FIX-22: expiry is not a breach, so the agent's bond is returned. The
+        # buyer simply chose not to claim within the window; the agent is not
+        # punished for that, and returning it here is what keeps an honest
+        # agent's collateral from being trapped by an idle buyer.
+        self._refund_agent_bond(policy)
 
     def _release_exposure(self, tier: str, coverage_atto: int) -> None:
         current = int(self.tier_locked_exposure[tier]) if tier in self.tier_locked_exposure else 0
         self.tier_locked_exposure[tier] = u256(max(0, current - coverage_atto))
+
+    def _close_policy(self, policy) -> None:
+        """Release the open-policy counters for a policy reaching a terminal
+        state (FIX-22b). The buyer's counter is always held; the agent's only
+        ever moved at accept_job, so it is released only if the agent actually
+        accepted -- otherwise a third party could inflate an agent's count by
+        issuing policies the agent then rejected."""
+        bkey = _normalize_key(str(policy.buyer))
+        b = int(self.buyer_open_count[bkey]) if bkey in self.buyer_open_count else 0
+        self.buyer_open_count[bkey] = u256(max(0, b - 1))
+        if policy.agent_accepted:
+            akey = policy.agent_id
+            a = int(self.agent_open_count[akey]) if akey in self.agent_open_count else 0
+            self.agent_open_count[akey] = u256(max(0, a - 1))
+
+    def _take_agent_bond(self, tier: str, bond_atto: int) -> None:
+        """Remove a resolved policy's bond from the held-escrow ledger. The
+        caller decides where the value goes next: to the pool (upheld breach)
+        or back to the agent (rejected claim / expiry)."""
+        current = int(self.tier_bond_escrow[tier]) if tier in self.tier_bond_escrow else 0
+        self.tier_bond_escrow[tier] = u256(max(0, current - bond_atto))
+
+    def _refund_agent_bond(self, policy) -> None:
+        """Return an agent's bond on a resolution that was not a breach. The
+        bond is held value, so releasing it is a ledger move only -- no tier
+        balance is touched."""
+        bond = int(policy.agent_bond_atto)
+        if bond <= 0:
+            return
+        self._take_agent_bond(policy.pool_tier, bond)
+        _EoaPay(self.agents[policy.agent_id].owner).emit_transfer(
+            value=u256(bond)
+            # External (EthSend) rail back to the agent's EOA wallet. External
+            # messages only execute on finality, so state commits before the
+            # transfer runs -- no re-entry is possible.
+        )
 
     @gl.public.view
     def get_policy(self, job_id: str) -> dict:
@@ -1308,12 +1529,15 @@ class Proofmark(gl.Contract):
             "buyer": str(p.buyer),
             "agent_id": p.agent_id,
             "coverage_atto": int(p.coverage_atto),
-            "spec_hash": p.spec_hash,
-            "deliverable_hash": p.deliverable_hash,
+            "spec_url": p.spec_url,
+            "spec_sha256": p.spec_sha256,
+            "deliverable_url": p.deliverable_url,
+            "deliverable_sha256": p.deliverable_sha256,
             "deadline_iso": p.deadline_iso,
             "pool_tier": p.pool_tier,
             "status": p.status,
             "agent_accepted": p.agent_accepted,
+            "agent_bond_atto": int(p.agent_bond_atto),
         }
 
     @gl.public.view
@@ -1494,7 +1718,7 @@ class Proofmark(gl.Contract):
                     job_key,
                 )
 
-        if policy.deliverable_hash == "":
+        if policy.deliverable_url == "":
             # The agent never submitted anything for this contract to
             # judge. Before the deadline that's premature -- the agent
             # still has time. After the deadline it's an unambiguous,
@@ -1533,6 +1757,12 @@ class Proofmark(gl.Contract):
         tier = policy.pool_tier
         pool_value = int(self.tier_balance[tier]) if tier in self.tier_balance else 0
         self._release_exposure(tier, int(policy.coverage_atto))
+        self._close_policy(policy)
+
+        # FIX-22: the agent's bond leaves the held-escrow ledger either way.
+        # Where it goes next is the entire economic point -- see below.
+        bond = int(policy.agent_bond_atto)
+        self._take_agent_bond(tier, bond)
 
         if breach:
             profile.claims_upheld_against = u256(int(profile.claims_upheld_against) + 1)
@@ -1557,7 +1787,19 @@ class Proofmark(gl.Contract):
             # get_accounting exposes these figures so the invariant is
             # externally checkable rather than merely asserted.
             payout = int(policy.coverage_atto)
-            self.tier_balance[tier] = u256(pool_value - payout)
+            # FIX-22: the FORFEITED AGENT BOND is credited to the pool in the
+            # same settlement that pays the claim. accept_job enforces
+            # bond >= coverage, so with bond == coverage the pool is made
+            # whole -- it pays `payout` out and takes `bond` in, net zero --
+            # and the balance can never go negative, because the locked-
+            # exposure invariant already guarantees pool_value >= coverage.
+            #
+            # The bond is routed to the POOL and never to the buyer. A
+            # self-dealer IS the buyer, so any buyer share would flow straight
+            # back to the attacker and the manufactured round would stay
+            # profitable. This single routing decision is what makes collusion
+            # value-destroying rather than merely rate-limited.
+            self.tier_balance[tier] = u256(pool_value + bond - payout)
 
             _EoaPay(policy.buyer).emit_transfer(value=u256(payout))
             # External (EthSend) rail: state commits before the transfer
@@ -1567,10 +1809,15 @@ class Proofmark(gl.Contract):
             # External (EthSend) rail: only executes on finality -- re-entry
             # is impossible because this call's effects are already committed.
         else:
-            # Bond forfeited into the pool it would otherwise have drawn from --
-            # compensates LPs for the cost of running consensus on a claim
-            # that didn't hold up, and deters spam.
+            # The claim did not hold up. The buyer's anti-spam bond is
+            # forfeited into the pool it would otherwise have drawn from --
+            # compensating LPs for the cost of running consensus on a claim
+            # that failed. The AGENT's bond goes back to the agent: a rejected
+            # claim is not a breach, and an honest agent's collateral must not
+            # be confiscated by a claim that lost.
             self.tier_balance[tier] = u256(pool_value + CLAIM_BOND_ATTO)
+            if bond > 0:
+                _EoaPay(self.agents[agent_key].owner).emit_transfer(value=u256(bond))
 
         self._recompute_tier(agent_key)
 
@@ -1596,13 +1843,18 @@ class Proofmark(gl.Contract):
         policy = self.policies[job_key]
         if policy.status != STATUS_ACTIVE:
             raise gl.vm.UserError(f"{ERROR_EXPECTED} policy not active")
-        if policy.deliverable_hash == "":
+        if policy.deliverable_url == "":
             # The no-deliverable path resolves deterministically inside
             # file_claim itself -- it never becomes a pending claim.
             raise gl.vm.UserError(f"{ERROR_EXPECTED} no deliverable to judge")
 
         # ---------------- Judged consensus (the only nondet part) ----------------
-        verdict = self._judge_breach(policy.spec_hash, policy.deliverable_hash)
+        verdict = self._judge_breach(
+            policy.spec_url,
+            policy.spec_sha256,
+            policy.deliverable_url,
+            policy.deliverable_sha256,
+        )
         del self.pending_claims[job_key]
         self._resolve_claim(job_key, policy, bool(verdict["breach"]))
 
@@ -1627,36 +1879,44 @@ class Proofmark(gl.Contract):
         del self.pending_claims[job_key]
         _EoaPay(policy.buyer).emit_transfer(value=u256(CLAIM_BOND_ATTO))
 
-    def _judge_breach(self, spec_hash: str, deliverable_hash: str) -> dict:
+    def _judge_breach(
+        self,
+        spec_url: str,
+        spec_sha256: str,
+        deliverable_url: str,
+        deliverable_sha256: str,
+    ) -> dict:
         """Adjudicate a claim. Every evidence outcome maps to a DEFINED verdict
         (FIX-21 review item 8); nothing is silently truncated, coerced, or
-        judged from bytes that do not match the CID that was committed to
-        on-chain. See _fetch_verified for how each state is derived.
+        judged from bytes that do not match the sha256 committed on-chain at
+        issue / submit time. See _fetch_url_verified for how each state is
+        derived.
 
         Custody rule (unchanged from FIX-01, now applied to every failure mode):
         the DELIVERABLE is agent-supplied and agent-replaceable, so a failure on
         it is the agent's breach; the SPEC is buyer-supplied, so a failure on
         it fails the CLAIM (bond forfeited, no payout). Payment only ever
         follows a spec and a deliverable that BOTH resolved and hashed
-        correctly, so neither party can manufacture a payout out of a broken
-        gateway or a mismatched CID.
+        correctly, so neither party can manufacture a payout out of an
+        unreachable host or a mismatched digest.
 
-        Transient failures (every gateway 5xx / rate-limited) are checked
+        Transient failures (5xx / rate-limited / transport error) are checked
         FIRST, for both sides: an outage is not a verdict about anyone. This
         raises [TRANSIENT], which forces validator rotation and leaves the
         pending claim intact and retryable -- and because judge_claim is not
         payable, nothing is burned while retrying."""
         def leader_fn() -> dict:
-            spec = _fetch_verified(spec_hash)
-            deliv = _fetch_verified(deliverable_hash)
+            spec = _fetch_url_verified(spec_url, spec_sha256)
+            deliv = _fetch_url_verified(deliverable_url, deliverable_sha256)
 
             if spec["state"] == "unavailable" or deliv["state"] == "unavailable":
-                # Rate limiting and 5xx are per-validator and transient -- not
-                # a verdict signal. Route to rotation, not a permanent outcome.
-                raise gl.vm.UserError(f"{ERROR_TRANSIENT} evidence gateway unavailable")
+                # Rate limiting, transport errors and 5xx are per-validator and
+                # transient -- not a verdict signal. Route to rotation, not a
+                # permanent outcome.
+                raise gl.vm.UserError(f"{ERROR_TRANSIENT} evidence host unavailable")
 
             # Agent's evidence: any non-ok state (gone, tampered, oversized,
-            # binary, unverifiable CID) is the agent's breach.
+            # binary, unverifiable digest) is the agent's breach.
             if deliv["state"] != "ok":
                 return {"score": 0, "breach": True}
             # Buyer's evidence: any non-ok state fails the claim rather than
@@ -1689,7 +1949,7 @@ class Proofmark(gl.Contract):
                 # An injected deliverable/spec is not adjudicable as submitted.
                 # Fenced prompts raise the cost of this but don't close the
                 # class -- the structural backstop is FIX-02: the agent
-                # accepted this exact spec_hash on-chain before any liability.
+                # accepted this exact spec_sha256 on-chain before any liability.
                 raise gl.vm.UserError(
                     f"{ERROR_EXPECTED} evidence contains a grading-injection "
                     f"attempt — claim cannot be adjudicated as submitted"
